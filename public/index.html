@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>VoidChat – Burn After 30 Min</title>
+  <link rel="manifest" href="/manifest.json"/>
+  <link rel="icon" href="/assets/logo.png"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+  <style>
+    :root { --glass: rgba(255, 255, 255, 0.1); }
+    .glass { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .typing { font-size: 0.8rem; color: #aaa; }
+  </style>
+</head>
+<body class="h-full bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white">
+
+<div class="min-h-screen flex flex-col">
+  <!-- Header -->
+  <header class="glass border-b border-white/10 p-4">
+    <div class="max-w-4xl mx-auto flex justify-between items-center">
+      <div class="flex items-center gap-2">
+        <img src="/assets/logo.png" alt="VoidChat" class="w-8 h-8"/>
+        <h1 class="text-xl font-bold">VoidChat</h1>
+      </div>
+      <div id="online" class="text-sm">Connecting...</div>
+    </div>
+  </header>
+
+  <!-- Room Setup -->
+  <div id="setup" class="flex-1 flex items-center justify-center p-6">
+    <div class="glass rounded-2xl p-8 max-w-md w-full shadow-2xl border border-white/20">
+      <h2 class="text-2xl font-bold mb-6 text-center">Create or Join Room</h2>
+      <input id="roomInput" placeholder="Room code (or leave blank)" class="w-full p-3 rounded-lg bg-white/10 border border-white/20 focus:outline-none focus:border-purple-400 mb-4"/>
+      <input id="passInput" type="password" placeholder="Passphrase (optional)" class="w-full p-3 rounded-lg bg-white/10 border border-white/20 focus:outline-none focus:border-purple-400 mb-4"/>
+      <button onclick="joinRoom()" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-3 rounded-lg hover:scale-105 transition">Enter Room</button>
+    </div>
+  </div>
+
+  <!-- Chat Room -->
+  <div id="chatRoom" class="hidden flex-1 flex flex-col max-w-4xl mx-auto w-full p-4 gap-4">
+    <div class="flex justify-between items-center mb-2">
+      <div class="flex items-center gap-2">
+        <span id="roomCode" class="font-mono bg-white/10 px-3 py-1 rounded"></span>
+        <button onclick="copyLink()" class="text-xs bg-white/10 px-2 py-1 rounded">Copy</button>
+        <button onclick="showQR()" class="text-xs bg-white/10 px-2 py-1 rounded">QR</button>
+      </div>
+      <div id="count" class="text-sm">0 online</div>
+    </div>
+
+    <div id="messages" class="flex-1 overflow-y-auto p-4 glass rounded-xl border border-white/10 space-y-3"></div>
+
+    <div class="flex gap-2">
+      <input id="msgInput" placeholder="Type a message..." class="flex-1 p-3 rounded-lg bg-white/10 border border-white/20 focus:outline-none focus:border-purple-400"/>
+      <button onclick="send()" class="bg-gradient-to-r from-purple-600 to-pink-600 px-6 rounded-lg font-bold hover:scale-105 transition">Send</button>
+    </div>
+
+    <div id="typing" class="typing h-5"></div>
+  </div>
+</div>
+
+<!-- QR Modal -->
+<div id="qrModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="this.classList.add('hidden')">
+  <div class="glass p-6 rounded-xl" onclick="event.stopPropagation()">
+    <div id="qrcode"></div>
+    <p class="text-center mt-4 text-sm">Scan to join</p>
+  </div>
+</div>
+
+<script>
+  const socket = io();
+  let roomId, peerId = crypto.randomUUID().slice(0,8), aesKey;
+  let typingTimeout;
+
+  async function joinRoom() {
+    roomId = document.getElementById('roomInput').value.trim() || crypto.randomUUID();
+    const passphrase = document.getElementById('passInput').value;
+
+    const baseKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(roomId + passphrase), 'PBKDF2', false, ['deriveKey']);
+    aesKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: new TextEncoder().encode('voidchat-salt'), iterations: 600000, hash: 'SHA-256' },
+      baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+    );
+
+    socket.emit('join', { room: roomId, peer: peerId });
+    document.getElementById('setup').classList.add('hidden');
+    document.getElementById('chatRoom').classList.remove('hidden');
+    document.getElementById('roomCode').textContent = roomId;
+    updateLink();
+  }
+
+  socket.on('history', msgs => {
+    const chat = document.getElementById('messages');
+    chat.innerHTML = '';
+    msgs.forEach(m => addMessage(m.text, m.isMe, m.sender));
+  });
+
+  socket.on('message', msg => addMessage(msg.text, false, msg.sender));
+  socket.on('online-count', n => document.getElementById('count').textContent = `${n} online`);
+  socket.on('typing', ({ peerId: id, isTyping }) => {
+    const el = document.getElementById('typing');
+    el.textContent = isTyping ? `${id} is typing...` : '';
+  });
+
+  function addMessage(text, isMe, sender) {
+    const div = document.createElement('div');
+    div.className = `flex ${isMe ? 'justify-end' : 'justify-start'}`;
+    const bubble = document.createElement('div');
+    bubble.className = `max-w-xs px-4 py-2 rounded-2xl ${isMe ? 'bg-gradient-to-r from-purple-600 to-pink-600' : 'bg-white/10'}`;
+    bubble.textContent = text;
+    if (!isMe) {
+      const name = document.createElement('div');
+      name.className = 'text-xs opacity-70 mt-1';
+      name.textContent = sender;
+      div.appendChild(name);
+    }
+    div.appendChild(bubble);
+    document.getElementById('messages').appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  async function encrypt(text) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = new TextEncoder().encode(text);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, data);
+    return {
+      ciphertext: btoa(String.fromCharCode(...new Uint8Array(ct))),
+      iv: btoa(String.fromCharCode(...iv))
+    };
+  }
+
+  async function decrypt(ctB64, ivB64) {
+    const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
+    const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ct);
+    return new TextDecoder().decode(pt);
+  }
+
+  async function send() {
+    const input = document.getElementById('msgInput');
+    const text = input.value.trim();
+    if (!text) return;
+    const { ciphertext, iv } = await encrypt(text);
+    socket.emit('message', { ciphertext, iv });
+    addMessage(text, true, peerId);
+    input.value = '';
+  }
+
+  document.getElementById('msgInput').addEventListener('keypress', e => {
+    if (e.key === 'Enter') send();
+    clearTimeout(typingTimeout);
+    socket.emit('typing', true);
+    typingTimeout = setTimeout(() => socket.emit('typing', false), 1000);
+  });
+
+  function updateLink() {
+    const url = `${location.origin}?room=${roomId}`;
+    document.getElementById('copyBtn')?.remove();
+    const btn = document.createElement('button');
+    btn.textContent = 'Copy Link';
+    btn.onclick = () => { navigator.clipboard.writeText(url); alert('Copied!'); };
+    btn.className = 'text-xs bg-white/10 px-2 py-1 rounded';
+    document.querySelector('#chatRoom > div').appendChild(btn);
+  }
+
+  function copyLink() {
+    const url = `${location.origin}?room=${roomId}`;
+    navigator.clipboard.writeText(url);
+    alert('Room link copied!');
+  }
+
+  function showQR() {
+    const modal = document.getElementById('qrModal');
+    const qr = document.getElementById('qrcode');
+    qr.innerHTML = '';
+    new QRCode(qr, {
+      text: `${location.origin}?room=${roomId}`,
+      width: 200, height: 200, colorDark: "#ffffff", colorLight: "#00000000"
+    });
+    modal.classList.remove('hidden');
+  }
+
+  // Auto-join from URL
+  const params = new URLSearchParams(location.search);
+  if (params.get('room')) {
+    document.getElementById('roomInput').value = params.get('room');
+    joinRoom();
+  }
+
+  // PWA Install
+  let deferredPrompt;
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const btn = document.createElement('button');
+    btn.textContent = 'Install App';
+    btn.className = 'fixed bottom-4 right-4 bg-purple-600 text-white px-4 py-2 rounded-full shadow-lg z-50';
+    btn.onclick = () => {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then(() => btn.remove());
+    };
+    document.body.appendChild(btn);
+  });
+</script>
+
+<!-- PWA Service Worker -->
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js');
+  }
+</script>
+
+</body>
+</html>
