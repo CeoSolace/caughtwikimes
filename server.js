@@ -1,4 +1,4 @@
-// server.js – Fixed zlib Binary crash | RTM + LM | <0.3MB RAM | 30min TTL
+// server.js – RTM + LM + Replying | <0.3MB RAM | 30min TTL
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
@@ -17,18 +17,19 @@ const gunzip = promisify(zlib.gunzip);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Tiny message schema
+// Message schema (replyId added)
 const msgSchema = new mongoose.Schema({
   r: { type: String, required: true, index: true },
-  c: { type: Buffer, required: true },  // Store as Buffer
+  c: { type: Buffer, required: true },
   i: { type: String, required: true },
-  s: { type: String, required: true }
+  s: { type: String, required: true },
+  rep: { type: String, default: null } // replyTo message ID
 }, { timestamps: true, minimize: false });
 msgSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1800 });
 const Msg = mongoose.model('Msg', msgSchema);
 
 await mongoose.connect(process.env.MONGO_URI);
-console.log('MongoDB: 30min TTL | No RAM storage');
+console.log('MongoDB: 30min TTL | Replying enabled');
 
 const app = express();
 const server = createServer(app);
@@ -64,7 +65,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Socket.IO – RTM + LM
+// Socket.IO
 io.on('connection', (socket) => {
   let room, peer;
 
@@ -76,17 +77,17 @@ io.on('connection', (socket) => {
     socket.join(room);
 
     try {
-      // Load history and convert Binary → Buffer
       const hist = await Msg.find({ r: room }).sort({ createdAt: 1 }).limit(100).lean();
       const decompressed = await Promise.all(
         hist.map(async m => {
-          // FIX: Convert Binary → Buffer
           const buffer = Buffer.isBuffer(m.c) ? m.c : Buffer.from(m.c.buffer);
           const plaintext = (await gunzip(buffer)).toString();
           return {
+            _id: m._id.toString(),
             c: plaintext,
             i: m.i,
             s: m.s,
+            rep: m.rep,
             isMe: m.s === peer
           };
         })
@@ -94,41 +95,38 @@ io.on('connection', (socket) => {
 
       socket.emit('h', decompressed);
 
-      // Online count
       const cnt = io.sockets.adapter.rooms.get(room)?.size || 0;
       io.to(room).emit('o', cnt);
 
-      // Last message
       if (decompressed.length > 0) {
         const last = decompressed[decompressed.length - 1];
-        const lm = last.isMe
-          ? `You: ${last.c.slice(0, 20)}...`
-          : `${last.s}: ${last.c.slice(0, 20)}...`;
+        const lm = last.isMe ? `You: ${last.c.slice(0, 20)}...` : `${last.s}: ${last.c.slice(0, 20)}...`;
         socket.emit('lm', lm);
       }
     } catch (err) {
-      console.error('History load error:', err);
-      socket.emit('error', 'Failed to load messages');
+      console.error('History error:', err);
     }
   });
 
-  socket.on('m', async ({ c, i }) => {
+  socket.on('m', async ({ c, i, rep }) => {
     if (!room || !c || !i) return;
 
     try {
       const comp = await gzip(c);
       if (comp.length > 300) return;
 
-      await new Msg({ r: room, c: comp, i, s: peer }).save();
+      const msg = await new Msg({ r: room, c: comp, i, s: peer, rep }).save();
 
-      // RTM: Send to all
-      io.to(room).emit('m', { c, i, s: peer });
+      io.to(room).emit('m', {
+        _id: msg._id.toString(),
+        c, i, s: peer, rep,
+        isMe: false
+      });
 
-      // LM: Update
       const lm = `${peer}: ${c.slice(0, 20)}...`;
       io.to(room).emit('lm', lm);
     } catch (err) {
-      console.error('Message save error:', err);
+      console.error('Save error:', err);
     }
   });
 
@@ -145,5 +143,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(process.env.PORT || 3000, '0.0.0.0', () => {
-  console.log('VoidChat: RTM + LM | No zlib crash | Live');
+  console.log('VoidChat: Replying + RTM + LM | Live');
 });
