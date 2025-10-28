@@ -13,18 +13,25 @@
 </head>
 <body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white flex flex-col max-w-4xl mx-auto p-4 gap-3">
 
-  <div class="flex justify-between text-xs">
+  <!-- Header -->
+  <div class="flex justify-between items-center text-xs">
     <span id="code" class="font-mono bg-white/10 px-2 py-1 rounded"></span>
     <span id="online">0 online</span>
   </div>
 
+  <!-- Last Message Indicator -->
+  <div id="lm" class="text-xs opacity-60 h-5 text-center"></div>
+
+  <!-- Messages -->
   <div id="msgs" class="flex-1 overflow-y-auto g rounded-xl p-3 space-y-1 text-sm"></div>
 
+  <!-- Input -->
   <div class="flex gap-1">
     <input id="inp" placeholder="Type message..." class="flex-1 p-2 rounded bg-white/10 border border-white/20 focus:outline-none text-sm"/>
     <button onclick="send()" class="bg-gradient-to-r from-purple-600 to-pink-600 px-4 rounded text-sm font-bold">Send</button>
   </div>
 
+  <!-- Typing -->
   <div id="typing" class="text-xs opacity-60 h-4"></div>
 
 <script>
@@ -46,14 +53,31 @@
     socket.emit('join', { room: roomId, peer });
   })();
 
-  // === SOCKET ===
+  // === SOCKET EVENTS ===
   socket.on('h', async h => {
     const m = document.getElementById('msgs'); m.innerHTML = '';
-    for (const x of h) { const t = await decrypt(x.c, x.i); add(t, x.isMe, x.s); }
+    for (const x of h) {
+      const t = await decrypt(x.c, x.i);
+      add(t, x.isMe, x.s);
+    }
   });
-  socket.on('m', async x => { const t = await decrypt(x.c, x.i); add(t, false, x.s); });
-  socket.on('o', n => { document.getElementById('online').textContent = n + ' online'; });
-  socket.on('t', ({ s, t }) => { document.getElementById('typing').textContent = t ? s + ' typing...' : ''; });
+
+  socket.on('m', async x => {
+    const t = await decrypt(x.c, x.i);
+    add(t, false, x.s);
+  });
+
+  socket.on('o', n => {
+    document.getElementById('online').textContent = n + ' online';
+  });
+
+  socket.on('t', ({ s, t }) => {
+    document.getElementById('typing').textContent = t ? s + ' typing...' : '';
+  });
+
+  socket.on('lm', lm => {
+    document.getElementById('lm').textContent = lm;
+  });
 
   // === CRYPTO ===
   async function encrypt(text) {
@@ -62,6 +86,7 @@
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
     return { c: btoa(String.fromCharCode(...new Uint8Array(ct))), i: btoa(String.fromCharCode(...iv)) };
   }
+
   async function decrypt(c, i) {
     const ct = Uint8Array.from(atob(c), c => c.charCodeAt(0));
     const iv = Uint8Array.from(atob(i), c => c.charCodeAt(0));
@@ -84,7 +109,7 @@
     }
     div.appendChild(bubble);
     document.getElementById('msgs').appendChild(div);
-    div.scrollIntoView();
+    div.scrollIntoView({ behavior: 'smooth' });
   }
 
   async function send() {
