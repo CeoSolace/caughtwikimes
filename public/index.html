@@ -26,17 +26,17 @@
         <img src="/assets/logo.png" alt="VoidChat" class="w-8 h-8"/>
         <h1 class="text-xl font-bold">VoidChat</h1>
       </div>
-      <div id="online" class="text-sm">Secure • Ephemeral • Private</div>
+      <div class="text-sm">Secure • Ephemeral • Private</div>
     </div>
   </header>
 
-  <!-- Homepage: Generate Room -->
+  <!-- Homepage -->
   <div id="home" class="flex-1 flex items-center justify-center p-6">
     <div class="glass rounded-2xl p-8 max-w-md w-full shadow-2xl border border-white/20 text-center">
       <h2 class="text-3xl font-bold mb-4">30-Minute Vanishing Chat</h2>
       <p class="text-sm opacity-80 mb-8">All messages auto-delete forever. No logs. No trace.</p>
 
-      <button onclick="generateRoom()" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-4 rounded-xl hover:scale-105 transition text-lg shadow-lg">
+      <button id="genBtn" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-4 rounded-xl hover:scale-105 transition text-lg shadow-lg">
         Generate Secure Room
       </button>
 
@@ -51,7 +51,7 @@
     </div>
   </div>
 
-  <!-- Chat Room (Hidden until generated) -->
+  <!-- Chat Room -->
   <div id="chatRoom" class="hidden flex-1 flex flex-col max-w-4xl mx-auto w-full p-4 gap-4">
     <div class="flex justify-between items-center mb-2">
       <div class="flex items-center gap-2">
@@ -82,49 +82,80 @@
 </div>
 
 <script>
+  // === GLOBALS ===
   const socket = io();
   let roomId, peerId = crypto.randomUUID().slice(0,8), aesKey;
   let typingTimeout;
 
-  // Generate cryptographically secure room ID
-  function generateRoom() {
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    roomId = Array.from(bytes)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
+  // === DOM READY ===
+  document.addEventListener('DOMContentLoaded', () => {
+    const genBtn = document.getElementById('genBtn');
+    if (!genBtn) return console.error('Generate button not found');
 
-    // Derive AES key from roomId (no passphrase needed)
-    crypto.subtle.importKey('raw', new TextEncoder().encode(roomId), 'PBKDF2', false, ['deriveKey'])
-      .then(base => crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt: new TextEncoder().encode('voidchat-entropy'), iterations: 600000, hash: 'SHA-256' },
+    genBtn.addEventListener('click', generateRoom);
+    genBtn.disabled = false;
+  });
+
+  // === GENERATE ROOM ===
+  async function generateRoom() {
+    const btn = document.getElementById('genBtn');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+
+    try {
+      // 256-bit random room ID
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      roomId = Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      // Derive AES key from roomId
+      const base = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(roomId),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+      );
+      aesKey = await crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt: new TextEncoder().encode('voidchat-entropy'),
+          iterations: 600000,
+          hash: 'SHA-256'
+        },
         base,
         { name: 'AES-GCM', length: 256 },
         false,
         ['encrypt', 'decrypt']
-      ))
-      .then(key => {
-        aesKey = key;
-        enterRoom();
-      });
+      );
+
+      enterRoom();
+    } catch (err) {
+      console.error('Crypto failed:', err);
+      alert('Web Crypto not supported. Use modern browser.');
+      btn.disabled = false;
+      btn.textContent = 'Generate Secure Room';
+    }
   }
 
   function enterRoom() {
     socket.emit('join', { room: roomId, peer: peerId });
 
-    // Show room info
+    // UI: Show chat + room info
     document.getElementById('home').classList.add('hidden');
     document.getElementById('chatRoom').classList.remove('hidden');
     document.getElementById('roomCode').textContent = roomId;
     document.getElementById('roomDisplay').textContent = roomId;
     document.getElementById('roomInfo').classList.remove('hidden');
 
-    // Auto-copy link
+    // Auto-copy invite link
     const url = `${location.origin}?room=${roomId}`;
     navigator.clipboard.writeText(url).catch(() => {});
     setTimeout(() => alert('Link copied to clipboard!'), 300);
   }
 
-  // Socket Events
+  // === SOCKET EVENTS ===
   socket.on('history', async msgs => {
     const chat = document.getElementById('messages');
     chat.innerHTML = '';
@@ -148,7 +179,7 @@
     el.textContent = isTyping ? `${id} is typing...` : '';
   });
 
-  // UI Helpers
+  // === UI HELPERS ===
   function addMessage(text, isMe, sender) {
     const div = document.createElement('div');
     div.className = `flex ${isMe ? 'justify-end' : 'justify-start'}`;
@@ -193,7 +224,7 @@
     input.value = '';
   }
 
-  document.getElementById('msgInput').addEventListener('keypress', e => {
+  document.getElementById('msgInput')?.addEventListener('keypress', e => {
     if (e.key === 'Enter') send();
     clearTimeout(typingTimeout);
     socket.emit('typing', true);
@@ -218,26 +249,22 @@
     modal.classList.remove('hidden');
   }
 
-  // Auto-join from URL
+  // === AUTO-JOIN FROM URL ===
   const params = new URLSearchParams(location.search);
   const urlRoom = params.get('room');
-  if (urlRoom && urlRoom.match(/^[0-9a-f]{64}$/)) {
+  if (urlRoom && /^[0-9a-f]{64}$/.test(urlRoom)) {
     roomId = urlRoom;
-    crypto.subtle.importKey('raw', new TextEncoder().encode(roomId), 'PBKDF2', false, ['deriveKey'])
-      .then(base => crypto.subtle.deriveKey(
+    (async () => {
+      const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(roomId), 'PBKDF2', false, ['deriveKey']);
+      aesKey = await crypto.subtle.deriveKey(
         { name: 'PBKDF2', salt: new TextEncoder().encode('voidchat-entropy'), iterations: 600000, hash: 'SHA-256' },
-        base,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt']
-      ))
-      .then(key => {
-        aesKey = key;
-        enterRoom();
-      });
+        base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+      );
+      enterRoom();
+    })();
   }
 
-  // PWA Install Prompt
+  // === PWA INSTALL ===
   let deferredPrompt;
   window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
@@ -251,13 +278,11 @@
     };
     document.body.appendChild(btn);
   });
-</script>
 
-<script>
+  // === SERVICE WORKER ===
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js');
+    navigator.serviceWorker.register('/sw.js').catch(console.error);
   }
 </script>
-
 </body>
 </html>
