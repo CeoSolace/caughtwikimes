@@ -1,15 +1,8 @@
 {
   "name": "VoidChat",
-  "short_name": "VoidChat",
+  "short_name": "Void",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1a0033",
-  "theme_color": "#9333ea",
-  "icons": [
-    {
-      "src": "/assets/logo.png",
-      "sizes": "192x192",
-      "type": "image/png"
-    }
-  ]
+  "theme_color": "#9333ea"
 }
