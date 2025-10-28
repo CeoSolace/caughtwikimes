@@ -8,36 +8,24 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/socket.io/socket.io.js"></script>
   <style>
-    .g{backdrop-filter:blur(12px)}.h{display:none}
+    .g{backdrop-filter:blur(12px)}
   </style>
 </head>
-<body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white">
+<body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white flex flex-col max-w-4xl mx-auto p-4 gap-3">
 
-<!-- Anti-Recording (Optional) -->
-<div id="check" class="flex-1 flex items-center justify-center p-6">
-  <div class="g rounded-2xl p-8 text-center max-w-sm bg-white/5">
-    <h2 class="text-xl font-bold mb-2">Checking for Recording...</h2>
-    <p class="text-xs opacity-70">Optional check. Skip if blocked.</p>
-    <button onclick="skipCheck()" class="mt-4 text-xs underline">Skip</button>
-    <div class="h-2 bg-white/20 rounded-full overflow-hidden mt-4">
-      <div id="bar" class="h-full bg-gradient-to-r from-purple-600 to-pink-600 w-0 transition-all duration-300"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Chat -->
-<div id="chat" class="h flex-1 flex flex-col max-w-4xl mx-auto p-4 gap-3">
   <div class="flex justify-between text-xs">
     <span id="code" class="font-mono bg-white/10 px-2 py-1 rounded"></span>
     <span id="online">0 online</span>
   </div>
+
   <div id="msgs" class="flex-1 overflow-y-auto g rounded-xl p-3 space-y-1 text-sm"></div>
+
   <div class="flex gap-1">
-    <input id="inp" placeholder="Type..." class="flex-1 p-2 rounded bg-white/10 border border-white/20 focus:outline-none text-sm"/>
+    <input id="inp" placeholder="Type message..." class="flex-1 p-2 rounded bg-white/10 border border-white/20 focus:outline-none text-sm"/>
     <button onclick="send()" class="bg-gradient-to-r from-purple-600 to-pink-600 px-4 rounded text-sm font-bold">Send</button>
   </div>
+
   <div id="typing" class="text-xs opacity-60 h-4"></div>
-</div>
 
 <script>
   const socket = io();
@@ -45,27 +33,8 @@
   const peer = crypto.randomUUID().slice(0,8);
   let key;
 
-  // Optional anti-recording
-  async function runCheck() {
-    const bar = document.getElementById('bar');
-    let p = 0;
-    const int = setInterval(() => { p += 20; bar.style.width = p + '%'; if (p >= 100) clearInterval(int); }, 100);
-    try {
-      const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const r = new MediaRecorder(s);
-      r.start(10); await new Promise(r => setTimeout(r, 200)); r.stop();
-      startChat();
-    } catch { location.href = '/getfucked'; }
-  }
-
-  function skipCheck() {
-    document.getElementById('check').classList.add('h');
-    startChat();
-  }
-
-  async function startChat() {
-    document.getElementById('check').classList.add('h');
-    document.getElementById('chat').classList.remove('h');
+  // === INIT ===
+  (async () => {
     document.getElementById('code').textContent = roomId;
 
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(roomId), 'PBKDF2', false, ['deriveKey']);
@@ -75,9 +44,9 @@
     );
 
     socket.emit('join', { room: roomId, peer });
-  }
+  })();
 
-  // Socket
+  // === SOCKET ===
   socket.on('h', async h => {
     const m = document.getElementById('msgs'); m.innerHTML = '';
     for (const x of h) { const t = await decrypt(x.c, x.i); add(t, x.isMe, x.s); }
@@ -86,7 +55,7 @@
   socket.on('o', n => { document.getElementById('online').textContent = n + ' online'; });
   socket.on('t', ({ s, t }) => { document.getElementById('typing').textContent = t ? s + ' typing...' : ''; });
 
-  // Crypto
+  // === CRYPTO ===
   async function encrypt(text) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const data = new TextEncoder().encode(text);
@@ -100,7 +69,7 @@
     return new TextDecoder().decode(pt);
   }
 
-  // UI
+  // === UI ===
   function add(text, me, sender) {
     const div = document.createElement('div');
     div.className = `flex ${me ? 'justify-end' : 'justify-start'}`;
@@ -134,9 +103,6 @@
     socket.emit('t', true);
     window.t = setTimeout(() => socket.emit('t', false), 1000);
   });
-
-  // Start
-  runCheck();
 </script>
 </body>
 </html>
