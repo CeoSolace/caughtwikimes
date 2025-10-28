@@ -9,6 +9,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <style>
     .g{backdrop-filter:blur(12px)}
+    .reply { border-left: 3px solid #9333ea; padding-left: 8px; font-size: 0.75rem; opacity: 0.8; }
   </style>
 </head>
 <body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white flex flex-col max-w-4xl mx-auto p-4 gap-3">
@@ -23,7 +24,15 @@
   <div id="lm" class="text-xs opacity-60 h-5 text-center"></div>
 
   <!-- Messages -->
-  <div id="msgs" class="flex-1 overflow-y-auto g rounded-xl p-3 space-y-1 text-sm"></div>
+  <div id="msgs" class="flex-1 overflow-y-auto g rounded-xl p-3 space-y-2 text-sm"></div>
+
+  <!-- Reply Preview -->
+  <div id="replyPreview" class="hidden bg-white/5 p-2 rounded text-xs">
+    <div class="flex justify-between">
+      <span id="replyText"></span>
+      <button onclick="cancelReply()" class="text-red-400">×</button>
+    </div>
+  </div>
 
   <!-- Input -->
   <div class="flex gap-1">
@@ -38,7 +47,7 @@
   const socket = io();
   const roomId = location.pathname.split('/').pop();
   const peer = crypto.randomUUID().slice(0,8);
-  let key;
+  let key, replyTo = null;
 
   // === INIT ===
   (async () => {
@@ -53,33 +62,104 @@
     socket.emit('join', { room: roomId, peer });
   })();
 
-  // === SOCKET EVENTS ===
+  // === SOCKET ===
   socket.on('h', async h => {
     const m = document.getElementById('msgs'); m.innerHTML = '';
     for (const x of h) {
       const t = await decrypt(x.c, x.i);
-      add(t, x.isMe, x.s);
+      add(t, x.isMe, x.s, x._id, x.rep ? await getReplyText(x.rep) : null);
     }
   });
 
-  // FIXED: Only add remote messages
   socket.on('m', async x => {
-    if (x.s === peer) return; // Ignore own echo
+    if (x.s === peer) return;
     const t = await decrypt(x.c, x.i);
-    add(t, false, x.s);
+    const repText = x.rep ? await getReplyText(x.rep) : null;
+    add(t, false, x.s, x._id, repText);
   });
 
-  socket.on('o', n => {
-    document.getElementById('online').textContent = n + ' online';
-  });
+  socket.on('o', n => { document.getElementById('online').textContent = n + ' online'; });
+  socket.on('t', ({ s, t }) => { document.getElementById('typing').textContent = t ? s + ' typing...' : ''; });
+  socket.on('lm', lm => { document.getElementById('lm').textContent = lm; });
 
-  socket.on('t', ({ s, t }) => {
-    document.getElementById('typing').textContent = t ? s + ' typing...' : '';
-  });
+  // === REPLY ===
+  function reply(msgId, sender, text) {
+    replyTo = msgId;
+    const preview = `${sender}: ${text.slice(0, 30)}${text.length > 30 ? '...' : ''}`;
+    document.getElementById('replyText').textContent = preview;
+    document.getElementById('replyPreview').classList.remove('hidden');
+    document.getElementById('inp').focus();
+  }
 
-  socket.on('lm', lm => {
-    document.getElementById('lm').textContent = lm;
-  });
+  function cancelReply() {
+    replyTo = null;
+    document.getElementById('replyPreview').classList.add('hidden');
+  }
+
+  async function getReplyText(repId) {
+    const msg = (await Msg.findById(repId).lean());
+    if (!msg) return '[deleted]';
+    const buffer = Buffer.isBuffer(msg.c) ? msg.c : Buffer.from(msg.c.buffer);
+    return (await gunzip(buffer)).toString().slice(0, 30) + '...';
+  }
+
+  // === SEND ===
+  async function send() {
+    const inp = document.getElementById('inp');
+    const text = inp.value.trim();
+    if (!text) return;
+
+    add(text, true, peer, null, replyTo ? await getReplyText(replyTo) : null);
+    const data = await encrypt(text);
+    socket.emit('m', { ...data, rep: replyTo });
+
+    inp.value = '';
+    cancelReply();
+  }
+
+  // === ADD MESSAGE ===
+  function add(text, me, sender, msgId, replyText) {
+    const div = document.createElement('div');
+    div.className = `flex ${me ? 'justify-end' : 'justify-start'} group`;
+    if (msgId) div.dataset.id = msgId;
+
+    const bubble = document.createElement('div');
+    bubble.className = `max-w-xs px-3 py-2 rounded-xl text-sm relative ${me ? 'bg-gradient-to-r from-purple-600 to-pink-600' : 'bg-white/10'}`;
+
+    // Reply quote
+    if (replyText) {
+      const rep = document.createElement('div');
+      rep.className = 'reply mb-1';
+      rep.textContent = replyText;
+      bubble.appendChild(rep);
+    }
+
+    // Message text
+    const msg = document.createElement('div');
+    msg.textContent = text;
+    bubble.appendChild(msg);
+
+    // Reply button (others only)
+    if (!me && msgId) {
+      const btn = document.createElement('button');
+      btn.textContent = '↩';
+      btn.className = 'absolute -left-6 top-1 opacity-0 group-hover:opacity-100 text-xs';
+      btn.onclick = () => reply(msgId, sender, text);
+      div.appendChild(btn);
+    }
+
+    // Sender name
+    if (!me) {
+      const name = document.createElement('div');
+      name.className = 'text-xs opacity-70 mt-1';
+      name.textContent = sender;
+      div.appendChild(name);
+    }
+
+    div.appendChild(bubble);
+    document.getElementById('msgs').appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth' });
+  }
 
   // === CRYPTO ===
   async function encrypt(text) {
@@ -96,41 +176,7 @@
     return new TextDecoder().decode(pt);
   }
 
-  // === SEND MESSAGE ===
-  async function send() {
-    const inp = document.getElementById('inp');
-    const text = inp.value.trim();
-    if (!text) return;
-
-    // 1. Add locally (instant, right side)
-    add(text, true, peer);
-
-    // 2. Encrypt & send to server
-    const data = await encrypt(text);
-    socket.emit('m', data);
-
-    inp.value = '';
-  }
-
-  // === ADD MESSAGE ===
-  function add(text, me, sender) {
-    const div = document.createElement('div');
-    div.className = `flex ${me ? 'justify-end' : 'justify-start'}`;
-    const bubble = document.createElement('div');
-    bubble.className = `max-w-xs px-3 py-2 rounded-xl text-sm ${me ? 'bg-gradient-to-r from-purple-600 to-pink-600' : 'bg-white/10'}`;
-    bubble.textContent = text;
-    if (!me) {
-      const name = document.createElement('div');
-      name.className = 'text-xs opacity-70';
-      name.textContent = sender;
-      div.appendChild(name);
-    }
-    div.appendChild(bubble);
-    document.getElementById('msgs').appendChild(div);
-    div.scrollIntoView({ behavior: 'smooth' });
-  }
-
-  // === TYPING ===
+  // === INPUT ===
   document.getElementById('inp').addEventListener('keypress', e => {
     if (e.key === 'Enter') send();
     clearTimeout(window.t);
