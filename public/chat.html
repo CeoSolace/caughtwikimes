@@ -19,7 +19,7 @@
     <span id="online">0 online</span>
   </div>
 
-  <!-- Last Message Indicator -->
+  <!-- Last Message -->
   <div id="lm" class="text-xs opacity-60 h-5 text-center"></div>
 
   <!-- Messages -->
@@ -62,7 +62,9 @@
     }
   });
 
+  // FIXED: Only add remote messages
   socket.on('m', async x => {
+    if (x.s === peer) return; // Ignore own echo
     const t = await decrypt(x.c, x.i);
     add(t, false, x.s);
   });
@@ -94,7 +96,23 @@
     return new TextDecoder().decode(pt);
   }
 
-  // === UI ===
+  // === SEND MESSAGE ===
+  async function send() {
+    const inp = document.getElementById('inp');
+    const text = inp.value.trim();
+    if (!text) return;
+
+    // 1. Add locally (instant, right side)
+    add(text, true, peer);
+
+    // 2. Encrypt & send to server
+    const data = await encrypt(text);
+    socket.emit('m', data);
+
+    inp.value = '';
+  }
+
+  // === ADD MESSAGE ===
   function add(text, me, sender) {
     const div = document.createElement('div');
     div.className = `flex ${me ? 'justify-end' : 'justify-start'}`;
@@ -112,16 +130,7 @@
     div.scrollIntoView({ behavior: 'smooth' });
   }
 
-  async function send() {
-    const inp = document.getElementById('inp');
-    const text = inp.value.trim();
-    if (!text) return;
-    const data = await encrypt(text);
-    socket.emit('m', data);
-    add(text, true, peer);
-    inp.value = '';
-  }
-
+  // === TYPING ===
   document.getElementById('inp').addEventListener('keypress', e => {
     if (e.key === 'Enter') send();
     clearTimeout(window.t);
