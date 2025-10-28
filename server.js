@@ -1,4 +1,4 @@
-// server.js – Dedicated /r/:id | <0.3MB RAM | 30min TTL | E2EE
+// server.js – RTM + LM | <0.3MB RAM | 30min TTL | E2EE
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
@@ -32,7 +32,12 @@ console.log('MongoDB: 30min TTL | No RAM storage');
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server, { cors: { origin: '*' }, maxHttpBufferSize: 3e5 });
+const io = new Server(server, {
+  cors: { origin: '*' },
+  maxHttpBufferSize: 3e5,
+  pingTimeout: 10000,
+  pingInterval: 5000
+});
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
@@ -59,7 +64,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Socket.IO – zero message RAM
+// Socket.IO – RTM + LM
 io.on('connection', (socket) => {
   let room, peer;
 
@@ -70,6 +75,7 @@ io.on('connection', (socket) => {
     room = r; peer = p;
     socket.join(room);
 
+    // Send history
     const hist = await Msg.find({ r: room }).sort({ createdAt: 1 }).limit(100).lean();
     const decompressed = await Promise.all(
       hist.map(async m => ({
@@ -81,8 +87,16 @@ io.on('connection', (socket) => {
     );
     socket.emit('h', decompressed);
 
+    // Update online count
     const cnt = io.sockets.adapter.rooms.get(room)?.size || 0;
     io.to(room).emit('o', cnt);
+
+    // Send last message indicator
+    if (decompressed.length > 0) {
+      const last = decompressed[decompressed.length - 1];
+      const lm = last.isMe ? `You: ${last.c.slice(0, 20)}...` : `${last.s}: ${last.c.slice(0, 20)}...`;
+      socket.emit('lm', lm);
+    }
   });
 
   socket.on('m', async ({ c, i }) => {
@@ -91,7 +105,13 @@ io.on('connection', (socket) => {
     if (comp.length > 300) return;
 
     await new Msg({ r: room, c: comp, i, s: peer }).save();
-    socket.to(room).emit('m', { c, i, s: peer });
+
+    // RTM: Broadcast to all in room
+    io.to(room).emit('m', { c, i, s: peer });
+
+    // LM: Update last message
+    const lm = `${peer}: ${c.slice(0, 20)}...`;
+    io.to(room).emit('lm', lm);
   });
 
   socket.on('t', (typing) => {
@@ -107,5 +127,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(process.env.PORT || 3000, () => {
-  console.log('VoidChat: /r/:id | <0.3MB RAM | No anti-recording | Live');
+  console.log('VoidChat: RTM + LM | <0.3MB RAM | Live');
 });
