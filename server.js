@@ -1,4 +1,4 @@
-// server.js – Dedicated /r/:id | <0.3MB RAM | 30min TTL
+// server.js – Dedicated /r/:id | <0.3MB RAM | 30min TTL | E2EE
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
@@ -45,11 +45,6 @@ app.get('/r/:roomId', (req, res) => {
     return res.status(400).send('Invalid room');
   }
   res.sendFile(path.join(__dirname, 'public', 'chat.html'));
-});
-
-// /getfucked
-app.get('/getfucked', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'getfucked.html'));
 });
 
 // Rate limit
@@ -112,5 +107,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(process.env.PORT || 3000, () => {
-  console.log('VoidChat: /r/:id | <0.3MB RAM | Live');
+  console.log('VoidChat: /r/:id | <0.3MB RAM | No anti-recording | Live');
 });
