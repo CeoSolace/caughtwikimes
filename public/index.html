@@ -3,171 +3,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>VoidChat</title>
+  <title>VoidChat – Generate Room</title>
   <link rel="manifest" href="/manifest.json"/>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="/socket.io/socket.io.js"></script>
   <style>
-    .g{backdrop-filter:blur(12px)}.h{display:none}
+    .g{backdrop-filter:blur(12px)}
   </style>
 </head>
-<body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white">
-
-<!-- Anti-Recording Check -->
-<div id="c" class="flex-1 flex items-center justify-center p-6">
-  <div class="g rounded-2xl p-8 text-center max-w-sm bg-white/5">
-    <h2 class="text-xl font-bold mb-2">Checking for Recording...</h2>
-    <p class="text-xs opacity-70">Do not record. You will be blocked.</p>
-    <div class="h-2 bg-white/20 rounded-full overflow-hidden mt-4">
-      <div id="b" class="h-full bg-gradient-to-r from-purple-600 to-pink-600 w-0 transition-all duration-300"></div>
-    </div>
+<body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white flex items-center justify-center p-6">
+  <div class="g rounded-2xl p-10 max-w-md w-full text-center bg-white/5 border border-white/10">
+    <h1 class="text-3xl font-bold mb-4">VoidChat</h1>
+    <p class="text-sm opacity-80 mb-8">30-minute vanishing chat. No logs. No trace.</p>
+    <button id="gen" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-4 rounded-xl hover:scale-105 transition text-lg">
+      Generate Secure Room
+    </button>
   </div>
-</div>
 
-<!-- Home -->
-<div id="home" class="h flex-1 flex items-center justify-center p-6">
-  <button onclick="gen()" class="g rounded-xl px-8 py-4 text-lg font-bold bg-gradient-to-r from-purple-600 to-pink-600 hover:scale-105 transition">
-    Generate Secure Room
-  </button>
-</div>
-
-<!-- Chat -->
-<div id="chat" class="h flex-1 flex flex-col max-w-4xl mx-auto p-4 gap-3">
-  <div class="flex justify-between text-xs">
-    <span id="code" class="font-mono bg-white/10 px-2 py-1 rounded"></span>
-    <span id="online">0 online</span>
-  </div>
-  <div id="msgs" class="flex-1 overflow-y-auto g rounded-xl p-3 space-y-1 text-sm"></div>
-  <div class="flex gap-1">
-    <input id="i" placeholder="Type message..." class="flex-1 p-2 rounded bg-white/10 border border-white/20 focus:outline-none text-sm"/>
-    <button onclick="s()" class="bg-gradient-to-r from-purple-600 to-pink-600 px-4 rounded text-sm font-bold">Send</button>
-  </div>
-  <div id="t" class="text-xs opacity-60 h-4"></div>
-</div>
-
-<script>
-  const socket = io();
-  let room, peer = crypto.randomUUID().slice(0,8), key;
-
-  // === ANTI-RECORDING ===
-  async function check() {
-    const bar = document.getElementById('b');
-    let p = 0;
-    const int = setInterval(() => {
-      p += 15; bar.style.width = p + '%';
-      if (p >= 100) clearInterval(int);
-    }, 150);
-
-    try {
-      const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const r = new MediaRecorder(s);
-      r.start(10);
-      await new Promise(r => setTimeout(r, 300));
-      r.stop();
-      document.getElementById('c').classList.add('h');
-      document.getElementById('home').classList.remove('h');
-    } catch {
-      location.href = '/getfucked';
-    }
-  }
-
-  // === GENERATE ROOM ===
-  async function gen() {
-    const b = crypto.getRandomValues(new Uint8Array(32));
-    room = Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join('');
-    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(room), 'PBKDF2', false, ['deriveKey']);
-    key = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: new TextEncoder().encode('v'), iterations: 100000, hash: 'SHA-256' },
-      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
-    );
-
-    socket.emit('join', { room, peer });
-    document.getElementById('home').classList.add('h');
-    document.getElementById('chat').classList.remove('h');
-    document.getElementById('code').textContent = room;
-    navigator.clipboard.writeText(location.origin + '?room=' + room).catch(() => {});
-    setTimeout(() => alert('Link copied!'), 300);
-  }
-
-  // === SOCKET ===
-  socket.on('h', async h => {
-    const m = document.getElementById('msgs'); m.innerHTML = '';
-    for (const x of h) { const t = await d(x.c, x.i); add(t, x.isMe, x.s); }
-  });
-  socket.on('m', async x => { const t = await d(x.c, x.i); add(t, false, x.s); });
-  socket.on('o', n => { document.getElementById('online').textContent = n + ' online'; });
-  socket.on('t', ({ s, t }) => { document.getElementById('t').textContent = t ? s + ' typing...' : ''; });
-
-  // === UI ===
-  function add(text, me, sender) {
-    const div = document.createElement('div');
-    div.className = `flex ${me ? 'justify-end' : 'justify-start'}`;
-    const bubble = document.createElement('div');
-    bubble.className = `max-w-xs px-3 py-2 rounded-xl text-sm ${me ? 'bg-gradient-to-r from-purple-600 to-pink-600' : 'bg-white/10'}`;
-    bubble.textContent = text;
-    if (!me) {
-      const name = document.createElement('div');
-      name.className = 'text-xs opacity-70';
-      name.textContent = sender;
-      div.appendChild(name);
-    }
-    div.appendChild(bubble);
-    document.getElementById('msgs').appendChild(div);
-    div.scrollIntoView();
-  }
-
-  async function e(text) {
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const data = new TextEncoder().encode(text);
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
-    return {
-      c: btoa(String.fromCharCode(...new Uint8Array(ct))),
-      i: btoa(String.fromCharCode(...iv))
-    };
-  }
-
-  async function d(c, i) {
-    const ct = Uint8Array.from(atob(c), c => c.charCodeAt(0));
-    const iv = Uint8Array.from(atob(i), c => c.charCodeAt(0));
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
-    return new TextDecoder().decode(pt);
-  }
-
-  async function s() {
-    const inp = document.getElementById('i');
-    const text = inp.value.trim();
-    if (!text) return;
-    const data = await e(text);
-    socket.emit('m', data);
-    add(text, true, peer);
-    inp.value = '';
-  }
-
-  document.getElementById('i').addEventListener('keypress', e => {
-    if (e.key === 'Enter') s();
-    clearTimeout(window.typing);
-    socket.emit('t', true);
-    window.typing = setTimeout(() => socket.emit('t', false), 1000);
-  });
-
-  // Auto-join from URL
-  const urlRoom = new URLSearchParams(location.search).get('room');
-  if (urlRoom && /^[0-9a-f]{64}$/.test(urlRoom)) {
-    room = urlRoom;
-    (async () => {
-      const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(room), 'PBKDF2', false, ['deriveKey']);
-      key = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt: new TextEncoder().encode('v'), iterations: 100000, hash: 'SHA-256' },
-        base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
-      );
-      socket.emit('join', { room, peer });
-      document.getElementById('c').classList.add('h');
-      document.getElementById('chat').classList.remove('h');
-      document.getElementById('code').textContent = room;
-    })();
-  } else {
-    check();
-  }
-</script>
+  <script>
+    document.getElementById('gen').addEventListener('click', () => {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      const roomId = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join('');
+      const url = `${location.origin}/r/${roomId}`;
+      navigator.clipboard.writeText(url).catch(() => {});
+      location.href = url;
+    });
+  </script>
 </body>
 </html>
