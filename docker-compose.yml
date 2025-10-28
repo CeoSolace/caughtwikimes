@@ -1,0 +1,17 @@
+version: '3.9'
+services:
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "443:443"
+    restart: always
+    depends_on:
+      - mongo
+  mongo:
+    image: mongo:7
+    restart: always
+    volumes:
+      - mongo-data:/data/db
+volumes:
+  mongo-data:
