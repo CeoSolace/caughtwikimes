@@ -7,24 +7,31 @@
   <link rel="manifest" href="/manifest.json"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    .g{backdrop-filter:blur(12px)}
+    .g {
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
   </style>
 </head>
-<body class="h-full bg-gradient-to-br from-gray-900 to-purple-900 text-white flex items-center justify-center p-6">
-  <div class="g rounded-2xl p-10 max-w-md w-full text-center bg-white/5 border border-white/10">
-    <h1 class="text-3xl font-bold mb-4">VoidChat</h1>
-    <p class="text-sm opacity-80 mb-8">30-minute vanishing chat. No logs. No trace.</p>
-    <button id="gen" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-4 rounded-xl hover:scale-105 transition text-lg">
+<body class="h-full bg-gradient-to-br from-gray-900 via-purple-900 to-indigo-900 text-white flex items-center justify-center p-4 sm:p-6">
+  <div class="g rounded-2xl p-8 sm:p-10 w-full max-w-md text-center bg-white/10 border border-white/15 shadow-xl">
+    <h1 class="text-3xl font-extrabold tracking-tight mb-2">VoidChat</h1>
+    <p class="text-xs sm:text-sm text-gray-300 mb-8">30-minute ephemeral chat. No logs. No trace. Just vanish.</p>
+    <button id="gen" class="w-full bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-500 hover:to-pink-400 text-white font-bold py-4 rounded-xl transition-all duration-200 active:scale-95 focus:outline-none focus:ring-2 focus:ring-purple-400/50">
       Generate Secure Room
     </button>
   </div>
 
   <script>
-    document.getElementById('gen').addEventListener('click', () => {
+    document.getElementById('gen').addEventListener('click', async () => {
       const bytes = crypto.getRandomValues(new Uint8Array(32));
-      const roomId = Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join('');
+      const roomId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
       const url = `${location.origin}/r/${roomId}`;
-      navigator.clipboard.writeText(url).catch(() => {});
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch (err) {
+        // silently fail clipboard; doesn’t affect flow
+      }
       location.href = url;
     });
   </script>
