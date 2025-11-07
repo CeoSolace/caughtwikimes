@@ -8,50 +8,56 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="/socket.io/socket.io.js"></script>
   <style>
-    .g { backdrop-filter: blur(12px); background: rgba(30, 30, 46, 0.6); }
+    .g {
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: rgba(30, 30, 46, 0.6);
+    }
     .msg { position: relative; }
     .reply-btn {
       position: absolute;
       top: 50%;
-      left: -32px;
+      left: -36px;
       transform: translateY(-50%);
       opacity: 0;
-      transition: opacity 0.2s ease, transform 0.2s ease;
-      background: rgba(55, 55, 65, 0.8);
+      transition: opacity 0.2s ease;
+      background: rgba(55, 55, 65, 0.9);
       border: none;
-      border-radius: 4px;
-      padding: 4px 6px;
-      color: #8c8c94;
-      font-size: 0.75rem;
+      border-radius: 6px;
+      padding: 4px 8px;
+      color: #a0a0c0;
+      font-size: 0.7rem;
       font-weight: 600;
       cursor: pointer;
       display: flex;
       align-items: center;
       gap: 4px;
-    }
-    .reply-btn:hover {
-      background: rgba(70, 70, 80, 0.9);
-      color: #b9b9c2;
+      pointer-events: none;
     }
     .msg:hover .reply-btn {
       opacity: 1;
+      pointer-events: auto;
     }
-    .reply { 
-      border-left: 2px solid #8b5cf6; 
-      padding-left: 8px; 
-      font-size: 0.75rem; 
-      opacity: 0.85; 
-      margin-bottom: 4px; 
+    .reply-btn:hover {
+      background: rgba(80, 80, 95, 0.95);
+      color: #d0d0e0;
+    }
+    .reply-quote {
+      border-left: 2px solid #8b5cf6;
+      padding-left: 8px;
+      font-size: 0.75rem;
+      opacity: 0.85;
+      margin-bottom: 4px;
       color: #c7c7d7;
     }
-    .sender { 
-      font-size: 0.75rem; 
-      opacity: 0.7; 
-      margin-top: 4px; 
+    .sender-tag {
+      font-size: 0.75rem;
+      opacity: 0.7;
+      margin-top: 4px;
       color: #a0a0b0;
     }
     .message-bubble {
-      transition: background 0.2s ease;
+      transition: filter 0.2s ease, background 0.2s ease;
     }
     .message-bubble:hover {
       filter: brightness(1.05);
@@ -83,7 +89,7 @@
   <!-- Input -->
   <div class="flex gap-2">
     <input id="inp" placeholder="Message..." class="flex-1 p-3 rounded-xl bg-black/30 border border-white/10 focus:outline-none focus:ring-2 focus:ring-purple-500/50 text-sm placeholder:text-gray-400"/>
-    <button onclick="send()" class="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 px-5 py-3 rounded-xl text-sm font-bold transition-all shadow-lg hover:shadow-purple-500/20">Send</button>
+    <button onclick="send()" class="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 px-5 py-3 rounded-xl text-sm font-bold transition-all shadow-lg hover:shadow-purple-500/30">Send</button>
   </div>
 
   <!-- Typing Indicator -->
@@ -93,14 +99,14 @@
   const socket = io();
   const roomId = location.pathname.split('/').pop();
 
-  // Persistent peer ID (8 chars)
   let peerId = localStorage.getItem('void_peer');
   if (!peerId) {
-    peerId = crypto.randomUUID().slice(0,8);
+    peerId = crypto.randomUUID().slice(0, 8);
     localStorage.setItem('void_peer', peerId);
   }
 
   let key, replyTo = null;
+  const messageCache = new Map();
 
   // === INIT ===
   (async () => {
@@ -117,9 +123,12 @@
 
   // === SOCKET ===
   socket.on('h', async h => {
-    const m = document.getElementById('msgs'); m.innerHTML = '';
+    const m = document.getElementById('msgs');
+    m.innerHTML = '';
+    messageCache.clear();
     for (const x of h) {
       const t = await decrypt(x.c, x.i);
+      messageCache.set(x._id, { text: t, sender: x.s });
       const repText = x.rep ? await getReplyText(x.rep) : null;
       add(t, x.s === peerId, x.s, x._id, repText);
     }
@@ -128,6 +137,7 @@
   socket.on('m', async x => {
     if (x.s === peerId) return;
     const t = await decrypt(x.c, x.i);
+    messageCache.set(x._id, { text: t, sender: x.s });
     const repText = x.rep ? await getReplyText(x.rep) : null;
     add(t, false, x.s, x._id, repText);
   });
@@ -136,10 +146,10 @@
   socket.on('t', ({ s, t }) => { document.getElementById('typing').textContent = t ? `${s} is typing...` : ''; });
   socket.on('lm', lm => { document.getElementById('lm').textContent = lm; });
 
-  // === REPLY ===
+  // === REPLY SYSTEM ===
   function reply(msgId, sender, text) {
     replyTo = msgId;
-    const preview = `${sender}: ${text.slice(0, 30)}${text.length > 30 ? '...' : ''}`;
+    const preview = `${sender}: ${text.slice(0, 40)}${text.length > 40 ? '...' : ''}`;
     document.getElementById('replyText').textContent = preview;
     document.getElementById('replyPreview').classList.remove('hidden');
     document.getElementById('inp').focus();
@@ -151,7 +161,11 @@
   }
 
   async function getReplyText(repId) {
-    return '[reply]';
+    const msg = messageCache.get(repId);
+    if (msg) {
+      return `${msg.sender}: ${msg.text.slice(0, 50)}${msg.text.length > 50 ? '…' : ''}`;
+    }
+    return '[deleted]';
   }
 
   // === SEND ===
@@ -160,7 +174,9 @@
     const text = inp.value.trim();
     if (!text) return;
 
-    add(text, true, peerId, null, replyTo ? await getReplyText(replyTo) : null);
+    const repText = replyTo ? await getReplyText(replyTo) : null;
+    const fakeId = '_' + Date.now();
+    add(text, true, peerId, fakeId, repText);
 
     const data = await encrypt(text);
     socket.emit('m', { ...data, rep: replyTo });
@@ -172,13 +188,12 @@
   // === ADD MESSAGE ===
   function add(text, isMe, sender, msgId, replyText) {
     const div = document.createElement('div');
-    div.className = `flex ${isMe ? 'justify-end' : 'justify-start'} msg group items-end`;
+    div.className = `flex ${isMe ? 'justify-end' : 'justify-start'} msg items-end relative`;
     if (msgId) div.dataset.id = msgId;
 
-    // Reply Button (Discord-style)
     if (!isMe && msgId) {
       const btn = document.createElement('button');
-      btn.innerHTML = '↩'; // Simple arrow icon
+      btn.innerHTML = '↩';
       btn.className = 'reply-btn';
       btn.onclick = (e) => {
         e.stopPropagation();
@@ -189,16 +204,16 @@
 
     const bubble = document.createElement('div');
     bubble.className = `max-w-[70%] px-4 py-2.5 rounded-2xl text-sm message-bubble ${
-      isMe 
-        ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white' 
+      isMe
+        ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
         : 'bg-black/40 text-gray-100'
     }`;
 
     if (replyText) {
-      const rep = document.createElement('div');
-      rep.className = 'reply';
-      rep.textContent = replyText;
-      bubble.appendChild(rep);
+      const quote = document.createElement('div');
+      quote.className = 'reply-quote';
+      quote.textContent = replyText;
+      bubble.appendChild(quote);
     }
 
     const msg = document.createElement('div');
@@ -207,7 +222,7 @@
 
     if (!isMe) {
       const name = document.createElement('div');
-      name.className = 'sender';
+      name.className = 'sender-tag';
       name.textContent = sender;
       div.appendChild(name);
     }
@@ -222,7 +237,10 @@
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const data = new TextEncoder().encode(text);
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
-    return { c: btoa(String.fromCharCode(...new Uint8Array(ct))), i: btoa(String.fromCharCode(...iv)) };
+    return {
+      c: btoa(String.fromCharCode(...new Uint8Array(ct))),
+      i: btoa(String.fromCharCode(...iv))
+    };
   }
 
   async function decrypt(c, i) {
@@ -234,10 +252,13 @@
 
   // === INPUT ===
   document.getElementById('inp').addEventListener('keypress', e => {
-    if (e.key === 'Enter') send();
-    clearTimeout(window.t);
+    if (e.key === 'Enter') {
+      send();
+      return;
+    }
+    clearTimeout(window.typingTimer);
     socket.emit('t', true);
-    window.t = setTimeout(() => socket.emit('t', false), 1000);
+    window.typingTimer = setTimeout(() => socket.emit('t', false), 1000);
   });
 </script>
 </body>
