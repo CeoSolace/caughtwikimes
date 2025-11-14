@@ -9,6 +9,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import zlib from 'zlib';
 import { promisify } from 'util';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -16,33 +18,83 @@ const gunzip = promisify(zlib.gunzip);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Server schema
+// User schema
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true, index: true },
+  password: { type: String, required: true },
+  email: { type: String, required: false, unique: true, sparse: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Server schema with owner and icon
 const serverSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  id: { type: String, required: true, unique: true, index: true }
-}, { timestamps: true });
+  id: { type: String, required: true, unique: true, index: true },
+  ownerId: { type: String, required: true },
+  icon: { type: String, default: null }, // URL or emoji
+  createdAt: { type: Date, default: Date.now }
+});
 
-// Channel schema
+// Channel schema (max 15 per server)
 const channelSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  serverId: { type: String, required: true, index: true }
+  serverId: { type: String, required: true, index: true },
+  ownerId: { type: String, required: true },
+  type: { type: String, default: 'text' } // text, voice (future)
+}, { timestamps: true });
+
+// Role schema (max 50 per server)
+const roleSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  serverId: { type: String, required: true, index: true },
+  color: { type: String, default: '#ffffff' },
+  position: { type: Number, default: 0 },
+  permissions: { type: Number, default: 0 }, // Bitfield for 25 permissions
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Member schema
+const memberSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  serverId: { type: String, required: true, index: true },
+  roles: [{ type: String }], // Array of role IDs
+  banned: { type: Boolean, default: false },
+  timeoutUntil: { type: Date, default: null }
 }, { timestamps: true });
 
 // Message schema with reply support
 const msgSchema = new mongoose.Schema({
   channelId: { type: String, required: true, index: true },
-  c: { type: Buffer, required: true },              // gzipped plaintext
-  i: { type: String, required: true },              // IV for AES
-  s: { type: String, required: true },              // sender peer ID
-  rep: { type: String, default: null }              // replied-to message ID
+  c: { type: Buffer, required: true },
+  i: { type: String, required: true },
+  s: { type: String, required: true },
+  rep: { type: String, default: null }
 }, { timestamps: true, minimize: false });
 
 // TTL index: auto-delete after 30 minutes
 msgSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1800 });
 
+const User = mongoose.model('User', userSchema);
 const ServerModel = mongoose.model('Server', serverSchema);
 const Channel = mongoose.model('Channel', channelSchema);
+const Role = mongoose.model('Role', roleSchema);
+const Member = mongoose.model('Member', memberSchema);
 const Msg = mongoose.model('Msg', msgSchema);
+
+// Permission constants (25 permissions + 1 admin)
+const Permissions = {
+  ADMINISTRATOR: 1n << 25n, // Bit 25 (admin permission)
+  CREATE_CHANNELS: 1n,
+  MANAGE_CHANNELS: 1n << 1n,
+  MANAGE_ROLES: 1n << 2n,
+  KICK_MEMBERS: 1n << 3n,
+  BAN_MEMBERS: 1n << 4n,
+  TIMEOUT_MEMBERS: 1n << 5n,
+  MANAGE_MESSAGES: 1n << 6n,
+  SEND_MESSAGES: 1n << 7n,
+  READ_MESSAGES: 1n << 8n,
+  // Add more permissions as needed up to 25
+};
 
 await mongoose.connect(process.env.MONGO_URI);
 console.log('✅ MongoDB connected | 30min TTL enabled');
@@ -51,8 +103,8 @@ console.log('✅ MongoDB connected | 30min TTL enabled');
 const initializeDefault = async () => {
   const defaultServer = await ServerModel.findOne({ id: 'general' });
   if (!defaultServer) {
-    await new ServerModel({ name: 'General', id: 'general' }).save();
-    await new Channel({ name: 'general', serverId: 'general' }).save();
+    await new ServerModel({ name: 'General', id: 'general', ownerId: 'system' }).save();
+    await new Channel({ name: 'general', serverId: 'general', ownerId: 'system' }).save();
     console.log('🔧 Created default server and channel');
   }
 };
@@ -83,6 +135,7 @@ const io = new Server(server, {
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve main page
@@ -101,14 +154,119 @@ app.get('/server/:serverId/channel/:channelId', (req, res) => {
 
 // API endpoints
 app.get('/api/servers', async (req, res) => {
-  const servers = await ServerModel.find({}, 'name id');
-  res.json(servers);
+  try {
+    const servers = await ServerModel.find({}, 'name id icon');
+    res.json(servers);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load servers' });
+  }
 });
 
 app.get('/api/server/:serverId/channels', async (req, res) => {
-  const { serverId } = req.params;
-  const channels = await Channel.find({ serverId }, 'name');
-  res.json(channels);
+  try {
+    const { serverId } = req.params;
+    const channels = await Channel.find({ serverId }, 'name');
+    res.json(channels);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load channels' });
+  }
+});
+
+// User authentication
+app.post('/api/register', async (req, res) => {
+  const { username, password, email } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  
+  try {
+    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
+    if (existingUser) return res.status(400).json({ error: 'Username or email already exists' });
+    
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ username, password: hashedPassword, email: email || undefined });
+    await user.save();
+    
+    const token = jwt.sign({ id: user._id.toString(), username: user.username }, process.env.JWT_SECRET || 'fallback_secret');
+    res.json({ token, username: user.username });
+  } catch (e) {
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  
+  try {
+    const user = await User.findOne({ username });
+    if (!user || !await bcrypt.compare(password, user.password)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const token = jwt.sign({ id: user._id.toString(), username: user.username }, process.env.JWT_SECRET || 'fallback_secret');
+    res.json({ token, username: user.username });
+  } catch (e) {
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Middleware for auth
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) return res.sendStatus(401);
+  
+  jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret', (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+// Authenticated endpoints
+app.get('/api/me', authenticateToken, (req, res) => {
+  res.json({ username: req.user.username, id: req.user.id });
+});
+
+// Server creation (for permanent accounts)
+app.post('/api/servers', authenticateToken, async (req, res) => {
+  const { name, icon } = req.body;
+  if (!name) return res.status(400).json({ error: 'Server name required' });
+  
+  try {
+    const serverId = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
+    const server = new ServerModel({ 
+      name, 
+      id: serverId, 
+      ownerId: req.user.id,
+      icon: icon || null 
+    });
+    await server.save();
+    
+    // Create default channel
+    await new Channel({ 
+      name: 'general', 
+      serverId: serverId, 
+      ownerId: req.user.id 
+    }).save();
+    
+    // Create @everyone role
+    await new Role({ 
+      name: '@everyone', 
+      serverId: serverId, 
+      permissions: BigInt(Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES) 
+    }).save();
+    
+    // Add owner as member
+    await new Member({ 
+      userId: req.user.id, 
+      serverId: serverId 
+    }).save();
+    
+    res.json({ id: serverId, name, icon: server.icon });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to create server' });
+  }
 });
 
 // Simple rate limiter
@@ -123,16 +281,42 @@ app.use((req, res, next) => {
   next();
 });
 
+// Content moderation
+const isContentAllowed = (text) => {
+  const lowerText = text.toLowerCase();
+  const prohibited = ['racism', 'terrorism', 'nazi', 'hitler', 'incite violence', 'plan harm'];
+  return !prohibited.some(term => lowerText.includes(term));
+};
+
 // Socket.IO logic
 io.on('connection', (socket) => {
-  let channel, peer;
+  let channel, peer, userId;
 
-  socket.on('join', async ({ channel: ch, peer: p }) => {
-    if (!ch || !p || p.length > 10) return socket.disconnect(true);
+  // Auth handshake
+  socket.on('auth', async (data) => {
+    if (data.token) {
+      try {
+        const decoded = jwt.verify(data.token, process.env.JWT_SECRET || 'fallback_secret');
+        userId = decoded.id;
+        peer = decoded.username;
+      } catch (e) {
+        // Invalid token - use temp username
+        peer = data.tempUsername;
+        userId = 'temp_' + crypto.randomUUID().substring(0, 8);
+      }
+    } else if (data.tempUsername) {
+      peer = data.tempUsername;
+      userId = 'temp_' + crypto.randomUUID().substring(0, 8);
+    } else {
+      return socket.disconnect(true);
+    }
+  });
+
+  socket.on('join', async ({ channel: ch }) => {
+    if (!ch) return socket.disconnect(true);
     channel = ch;
-    peer = p;
     socket.join(channel);
-
+    
     try {
       const hist = await Msg.find({ channelId: channel }).sort({ createdAt: 1 }).limit(100).lean();
       const decompressed = await Promise.all(
@@ -165,6 +349,10 @@ io.on('connection', (socket) => {
 
   socket.on('m', async ({ c, i, rep }) => {
     if (!channel || !c || typeof c !== 'string') return;
+    if (!isContentAllowed(c)) {
+      socket.emit('error', 'Content not allowed');
+      return;
+    }
 
     try {
       const comp = await gzip(c);
@@ -203,5 +391,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 EphemeralChat server running on port ${PORT}`);
+  console.log(`🚀 CaughtWiki server running on port ${PORT}`);
 });
