@@ -1,17 +1,30 @@
-version: '3.9'
+version: '3.8'
+
 services:
-  app:
+  caughtwiki:
     build: .
-    env_file: .env
     ports:
-      - "443:443"
-    restart: always
+      - "3000:3000"
+    environment:
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_NAME}
+      - MONGO_URI=${MONGO_URI}
+      - JWT_SECRET=${PASSPHRASE_SALT}
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${PORT}
     depends_on:
       - mongo
+
   mongo:
-    image: mongo:7
-    restart: always
+    image: mongo:6.0
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
     volumes:
       - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+
 volumes:
   mongo-data:
