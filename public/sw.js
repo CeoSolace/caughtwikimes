@@ -1,20 +1,22 @@
-self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open('voidchat-v1').then(cache => {
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open('caughtwiki-cache').then(cache => {
       return cache.addAll([
         '/',
         '/index.html',
-        '/manifest.json',
-        '/assets/logo.png'
+        '/channel.html',
+        '/index.js',
+        '/channel.js',
+        '/manifest.json'
       ]);
     })
   );
 });
 
-self.addEventListener('fetch', e => {
-  e.respondWith(
-    caches.match(e.request).then(response => {
-      return response || fetch(e.request);
+self.addEventListener('fetch', event => {
+  event.respondWith(
+    caches.match(event.request).then(response => {
+      return response || fetch(event.request);
     })
   );
 });
