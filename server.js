@@ -469,4 +469,57 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('m', async ({ c, i, rep,
+  socket.on('m', async ({ c, i, rep, attachments = [] }) => {
+    if (!channel || !c || typeof c !== 'string') return;
+    if (!isContentAllowed(c)) {
+      socket.emit('error', 'Content not allowed');
+      return;
+    }
+
+    try {
+      const comp = await gzip(c);
+      if (comp.length > 300) return;
+
+      const msg = await new Msg({ 
+        channelId: channel, 
+        c: comp, 
+        i, 
+        s: peer, 
+        rep,
+        attachments
+      }).save();
+
+      io.to(channel).emit('m', {
+        _id: msg._id.toString(),
+        c,
+        i,
+        s: peer,
+        rep,
+        attachments: msg.attachments
+      });
+
+      const prefix = peer === socket.id ? 'You' : peer;
+      io.to(channel).emit('lm', `${prefix}: ${c.slice(0, 20)}...`);
+    } catch (err) {
+      console.error('Message save error:', err);
+    }
+  });
+
+  socket.on('t', (typing) => {
+    if (channel && typeof typing === 'boolean') {
+      socket.to(channel).emit('t', { s: peer, t: typing });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    if (channel) {
+      const cnt = io.sockets.adapter.rooms.get(channel)?.size || 0;
+      io.to(channel).emit('o', cnt);
+    }
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 CaughtWiki server running on port ${PORT}`);
+});
