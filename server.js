@@ -63,7 +63,7 @@ const roleSchema = new mongoose.Schema({
   serverId: { type: String, required: true, index: true },
   color: { type: String, default: '#ffffff' },
   position: { type: Number, default: 0 },
-  permissions: { type: Number, default: 0 }
+  permissions: { type: Number, default: 0 } // Using Number type
 }, { timestamps: true });
 
 // Member schema
@@ -115,22 +115,22 @@ const Member = mongoose.model('Member', memberSchema);
 const Msg = mongoose.model('Msg', msgSchema);
 const AuditLog = mongoose.model('AuditLog', auditLogSchema);
 
-// Permission constants
+// Permission constants using regular Numbers
 const Permissions = {
-  ADMINISTRATOR: 1n << 25n,
-  CREATE_CHANNELS: 1n,
-  MANAGE_CHANNELS: 1n << 1n,
-  MANAGE_ROLES: 1n << 2n,
-  KICK_MEMBERS: 1n << 3n,
-  BAN_MEMBERS: 1n << 4n,
-  TIMEOUT_MEMBERS: 1n << 5n,
-  MANAGE_MESSAGES: 1n << 6n,
-  SEND_MESSAGES: 1n << 7n,
-  READ_MESSAGES: 1n << 8n,
-  UPLOAD_FILES: 1n << 9n,
-  CONNECT_VOICE: 1n << 10n,
-  SPEAK_VOICE: 1n << 11n,
-  VIEW_AUDIT_LOGS: 1n << 12n
+  ADMINISTRATOR: 1 << 25, // 33554432
+  CREATE_CHANNELS: 1 << 0, // 1
+  MANAGE_CHANNELS: 1 << 1, // 2
+  MANAGE_ROLES: 1 << 2, // 4
+  KICK_MEMBERS: 1 << 3, // 8
+  BAN_MEMBERS: 1 << 4, // 16
+  TIMEOUT_MEMBERS: 1 << 5, // 32
+  MANAGE_MESSAGES: 1 << 6, // 64
+  SEND_MESSAGES: 1 << 7, // 128
+  READ_MESSAGES: 1 << 8, // 256
+  UPLOAD_FILES: 1 << 9, // 512
+  CONNECT_VOICE: 1 << 10, // 1024
+  SPEAK_VOICE: 1 << 11, // 2048
+  VIEW_AUDIT_LOGS: 1 << 12  // 4096
 };
 
 // --- Utility Functions ---
@@ -185,10 +185,11 @@ const initializeDefault = async () => {
     await new ServerModel({ name: 'General', id: 'general', ownerId: 'system' }).save();
     await new Channel({ name: 'general', serverId: 'general', ownerId: 'system', type: 'text' }).save();
     await new Channel({ name: 'General Voice', serverId: 'general', ownerId: 'system', type: 'voice' }).save();
+    // Use regular number arithmetic for permissions
     await new Role({ 
       name: '@everyone', 
       serverId: 'general', 
-      permissions: BigInt(Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES | Permissions.UPLOAD_FILES | Permissions.CONNECT_VOICE | Permissions.SPEAK_VOICE | Permissions.VIEW_AUDIT_LOGS) 
+      permissions: Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES | Permissions.UPLOAD_FILES | Permissions.CONNECT_VOICE | Permissions.SPEAK_VOICE | Permissions.VIEW_AUDIT_LOGS 
     }).save();
     console.log('🔧 Created default server and channels');
   }
@@ -362,11 +363,11 @@ app.post('/api/servers', authenticateToken, async (req, res) => {
       type: 'voice'
     }).save();
     
-    // Create @everyone role
+    // Create @everyone role - using regular number arithmetic
     await new Role({ 
       name: '@everyone', 
       serverId: serverId, 
-      permissions: BigInt(Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES | Permissions.UPLOAD_FILES | Permissions.CONNECT_VOICE | Permissions.SPEAK_VOICE | Permissions.VIEW_AUDIT_LOGS) 
+      permissions: Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES | Permissions.UPLOAD_FILES | Permissions.CONNECT_VOICE | Permissions.SPEAK_VOICE | Permissions.VIEW_AUDIT_LOGS 
     }).save();
     
     // Add owner as member
