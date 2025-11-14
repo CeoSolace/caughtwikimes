@@ -1,8 +1,7 @@
 {
   "name": "caughtwiki",
   "version": "1.0.0",
-  "description": "Ephemeral messaging platform",
-  "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
@@ -14,7 +13,9 @@
     "bcrypt": "^5.1.0",
     "jsonwebtoken": "^9.0.0",
     "cloudinary": "^1.35.0",
-    "dotenv": "^16.0.0"
+    "dotenv": "^16.0.0",
+    "helmet": "^6.0.0",  // Make sure this line exists
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
