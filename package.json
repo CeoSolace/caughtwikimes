@@ -14,7 +14,7 @@
     "jsonwebtoken": "^9.0.0",
     "cloudinary": "^1.35.0",
     "dotenv": "^16.0.0",
-    "helmet": "^6.0.0",  // Make sure this line exists
+    "helmet": "^6.0.0",
     "cors": "^2.8.5"
   },
   "devDependencies": {
