@@ -11,6 +11,7 @@ import zlib from 'zlib';
 import { promisify } from 'util';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { v2 as cloudinary } from 'cloudinary';
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -18,61 +19,91 @@ const gunzip = promisify(zlib.gunzip);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
 // User schema
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true, index: true },
   password: { type: String, required: true },
   email: { type: String, required: false, unique: true, sparse: true },
+  avatar: { type: String, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 
-// Server schema with owner and icon
+// Server schema
 const serverSchema = new mongoose.Schema({
   name: { type: String, required: true },
   id: { type: String, required: true, unique: true, index: true },
   ownerId: { type: String, required: true },
-  icon: { type: String, default: null }, // URL or emoji
+  icon: { type: String, default: null },
+  iconId: { type: String, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 
-// Channel schema (max 15 per server)
+// Channel schema
 const channelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   serverId: { type: String, required: true, index: true },
   ownerId: { type: String, required: true },
-  type: { type: String, default: 'text' } // text, voice (future)
+  type: { type: String, default: 'text' },
+  createdAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// Role schema (max 50 per server)
+// Role schema
 const roleSchema = new mongoose.Schema({
   name: { type: String, required: true },
   serverId: { type: String, required: true, index: true },
   color: { type: String, default: '#ffffff' },
   position: { type: Number, default: 0 },
-  permissions: { type: Number, default: 0 }, // Bitfield for 25 permissions
-  createdAt: { type: Date, default: Date.now }
-});
+  permissions: { type: Number, default: 0 }
+}, { timestamps: true });
 
 // Member schema
 const memberSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   serverId: { type: String, required: true, index: true },
-  roles: [{ type: String }], // Array of role IDs
+  roles: [{ type: String }],
   banned: { type: Boolean, default: false },
-  timeoutUntil: { type: Date, default: null }
+  timeoutUntil: { type: Date, default: null },
+  joinedAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
-// Message schema with reply support
+// Message schema
 const msgSchema = new mongoose.Schema({
   channelId: { type: String, required: true, index: true },
   c: { type: Buffer, required: true },
   i: { type: String, required: true },
   s: { type: String, required: true },
-  rep: { type: String, default: null }
+  rep: { type: String, default: null },
+  attachments: [{
+    url: String,
+    publicId: String,
+    type: String,
+    filename: String,
+    size: Number
+  }]
 }, { timestamps: true, minimize: false });
 
-// TTL index: auto-delete after 30 minutes
+// Audit Log schema
+const auditLogSchema = new mongoose.Schema({
+  serverId: { type: String, required: true, index: true },
+  action: { type: String, required: true }, // e.g., 'MEMBER_JOIN', 'MEMBER_LEAVE', 'CHANNEL_CREATE', 'MESSAGE_DELETE', 'BAN', 'KICK', 'TIMEOUT'
+  userId: { type: String, required: true }, // User who performed the action
+  targetId: { type: String }, // Target user/channel if applicable
+  details: { type: Object, default: {} }, // Additional details
+  ip: { type: String }, // IP address (if available)
+  createdAt: { type: Date, default: Date.now }
+});
+
+// TTL index: auto-delete after 30 minutes for messages
 msgSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1800 });
+// Keep audit logs for 30 days
+auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 }); // 30 days
 
 const User = mongoose.model('User', userSchema);
 const ServerModel = mongoose.model('Server', serverSchema);
@@ -80,10 +111,11 @@ const Channel = mongoose.model('Channel', channelSchema);
 const Role = mongoose.model('Role', roleSchema);
 const Member = mongoose.model('Member', memberSchema);
 const Msg = mongoose.model('Msg', msgSchema);
+const AuditLog = mongoose.model('AuditLog', auditLogSchema);
 
-// Permission constants (25 permissions + 1 admin)
+// Permission constants
 const Permissions = {
-  ADMINISTRATOR: 1n << 25n, // Bit 25 (admin permission)
+  ADMINISTRATOR: 1n << 25n,
   CREATE_CHANNELS: 1n,
   MANAGE_CHANNELS: 1n << 1n,
   MANAGE_ROLES: 1n << 2n,
@@ -93,19 +125,28 @@ const Permissions = {
   MANAGE_MESSAGES: 1n << 6n,
   SEND_MESSAGES: 1n << 7n,
   READ_MESSAGES: 1n << 8n,
-  // Add more permissions as needed up to 25
+  UPLOAD_FILES: 1n << 9n,
+  CONNECT_VOICE: 1n << 10n,
+  SPEAK_VOICE: 1n << 11n,
+  VIEW_AUDIT_LOGS: 1n << 12n
 };
 
 await mongoose.connect(process.env.MONGO_URI);
 console.log('✅ MongoDB connected | 30min TTL enabled');
 
-// Create default server and channel
+// Create default server
 const initializeDefault = async () => {
   const defaultServer = await ServerModel.findOne({ id: 'general' });
   if (!defaultServer) {
     await new ServerModel({ name: 'General', id: 'general', ownerId: 'system' }).save();
-    await new Channel({ name: 'general', serverId: 'general', ownerId: 'system' }).save();
-    console.log('🔧 Created default server and channel');
+    await new Channel({ name: 'general', serverId: 'general', ownerId: 'system', type: 'text' }).save();
+    await new Channel({ name: 'General Voice', serverId: 'general', ownerId: 'system', type: 'voice' }).save();
+    await new Role({ 
+      name: '@everyone', 
+      serverId: 'general', 
+      permissions: BigInt(Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES | Permissions.UPLOAD_FILES | Permissions.CONNECT_VOICE | Permissions.SPEAK_VOICE | Permissions.VIEW_AUDIT_LOGS) 
+    }).save();
+    console.log('🔧 Created default server and channels');
   }
 };
 
@@ -138,12 +179,27 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve main page
+// Log audit events
+const logAudit = async (serverId, action, userId, targetId = null, details = {}, req = null) => {
+  try {
+    await new AuditLog({
+      serverId,
+      action,
+      userId,
+      targetId,
+      details,
+      ip: req ? req.ip : null
+    }).save();
+  } catch (err) {
+    console.error('Audit log failed:', err);
+  }
+};
+
+// Serve pages
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'server-list.html'));
 });
 
-// Serve channel
 app.get('/server/:serverId/channel/:channelId', (req, res) => {
   const { serverId, channelId } = req.params;
   if (!/^[a-zA-Z0-9_-]+$/.test(serverId) || !/^[a-zA-Z0-9_-]+$/.test(channelId)) {
@@ -165,10 +221,24 @@ app.get('/api/servers', async (req, res) => {
 app.get('/api/server/:serverId/channels', async (req, res) => {
   try {
     const { serverId } = req.params;
-    const channels = await Channel.find({ serverId }, 'name');
+    const channels = await Channel.find({ serverId }, 'name type');
     res.json(channels);
   } catch (e) {
     res.status(500).json({ error: 'Failed to load channels' });
+  }
+});
+
+// Audit logs endpoint
+app.get('/api/server/:serverId/audit-logs', authenticateToken, async (req, res) => {
+  try {
+    const { serverId } = req.params;
+    const logs = await AuditLog.find({ serverId })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json(logs);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to load audit logs' });
   }
 });
 
@@ -228,33 +298,59 @@ app.get('/api/me', authenticateToken, (req, res) => {
   res.json({ username: req.user.username, id: req.user.id });
 });
 
-// Server creation (for permanent accounts)
+// Server creation with Cloudinary upload
 app.post('/api/servers', authenticateToken, async (req, res) => {
   const { name, icon } = req.body;
   if (!name) return res.status(400).json({ error: 'Server name required' });
   
   try {
     const serverId = crypto.randomUUID().replace(/-/g, '').substring(0, 12);
+    let iconUrl = null;
+    let iconId = null;
+    
+    if (icon && icon.startsWith('')) {
+      try {
+        const uploadResult = await cloudinary.uploader.upload(icon, {
+          folder: 'caughtwiki/servers',
+          resource_type: 'auto',
+          public_id: `server_${serverId}_${Date.now()}`
+        });
+        iconUrl = uploadResult.secure_url;
+        iconId = uploadResult.public_id;
+      } catch (uploadErr) {
+        console.error('Cloudinary upload failed:', uploadErr);
+      }
+    }
+    
     const server = new ServerModel({ 
       name, 
       id: serverId, 
       ownerId: req.user.id,
-      icon: icon || null 
+      icon: iconUrl,
+      iconId: iconId
     });
     await server.save();
     
-    // Create default channel
+    // Create default channels
     await new Channel({ 
       name: 'general', 
       serverId: serverId, 
-      ownerId: req.user.id 
+      ownerId: req.user.id,
+      type: 'text'
+    }).save();
+    
+    await new Channel({ 
+      name: 'General Voice', 
+      serverId: serverId, 
+      ownerId: req.user.id,
+      type: 'voice'
     }).save();
     
     // Create @everyone role
     await new Role({ 
       name: '@everyone', 
       serverId: serverId, 
-      permissions: BigInt(Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES) 
+      permissions: BigInt(Permissions.READ_MESSAGES | Permissions.SEND_MESSAGES | Permissions.UPLOAD_FILES | Permissions.CONNECT_VOICE | Permissions.SPEAK_VOICE | Permissions.VIEW_AUDIT_LOGS) 
     }).save();
     
     // Add owner as member
@@ -263,133 +359,10 @@ app.post('/api/servers', authenticateToken, async (req, res) => {
       serverId: serverId 
     }).save();
     
+    // Log server creation
+    await logAudit(serverId, 'SERVER_CREATE', req.user.id, null, { serverName: name });
+    
     res.json({ id: serverId, name, icon: server.icon });
   } catch (e) {
     res.status(500).json({ error: 'Failed to create server' });
-  }
-});
-
-// Simple rate limiter
-const rateLimit = new Map();
-app.use((req, res, next) => {
-  const ip = req.ip;
-  const now = Date.now();
-  const hits = (rateLimit.get(ip) || []).filter(t => now - t < 60_000);
-  if (hits.length >= 30) return res.status(429).send('Too many requests');
-  hits.push(now);
-  rateLimit.set(ip, hits);
-  next();
-});
-
-// Content moderation
-const isContentAllowed = (text) => {
-  const lowerText = text.toLowerCase();
-  const prohibited = ['racism', 'terrorism', 'nazi', 'hitler', 'incite violence', 'plan harm'];
-  return !prohibited.some(term => lowerText.includes(term));
-};
-
-// Socket.IO logic
-io.on('connection', (socket) => {
-  let channel, peer, userId;
-
-  // Auth handshake
-  socket.on('auth', async (data) => {
-    if (data.token) {
-      try {
-        const decoded = jwt.verify(data.token, process.env.JWT_SECRET || 'fallback_secret');
-        userId = decoded.id;
-        peer = decoded.username;
-      } catch (e) {
-        // Invalid token - use temp username
-        peer = data.tempUsername;
-        userId = 'temp_' + crypto.randomUUID().substring(0, 8);
-      }
-    } else if (data.tempUsername) {
-      peer = data.tempUsername;
-      userId = 'temp_' + crypto.randomUUID().substring(0, 8);
-    } else {
-      return socket.disconnect(true);
-    }
-  });
-
-  socket.on('join', async ({ channel: ch }) => {
-    if (!ch) return socket.disconnect(true);
-    channel = ch;
-    socket.join(channel);
-    
-    try {
-      const hist = await Msg.find({ channelId: channel }).sort({ createdAt: 1 }).limit(100).lean();
-      const decompressed = await Promise.all(
-        hist.map(async (m) => {
-          const buffer = Buffer.isBuffer(m.c) ? m.c : Buffer.from(m.c.buffer);
-          const plaintext = (await gunzip(buffer)).toString();
-          return {
-            _id: m._id.toString(),
-            c: plaintext,
-            i: m.i,
-            s: m.s,
-            rep: m.rep
-          };
-        })
-      );
-
-      socket.emit('h', decompressed);
-      const cnt = io.sockets.adapter.rooms.get(channel)?.size || 0;
-      io.to(channel).emit('o', cnt);
-
-      if (decompressed.length > 0) {
-        const last = decompressed[decompressed.length - 1];
-        const prefix = last.s === peer ? 'You' : last.s;
-        socket.emit('lm', `${prefix}: ${last.c.slice(0, 20)}...`);
-      }
-    } catch (err) {
-      console.error('History load error:', err);
-    }
-  });
-
-  socket.on('m', async ({ c, i, rep }) => {
-    if (!channel || !c || typeof c !== 'string') return;
-    if (!isContentAllowed(c)) {
-      socket.emit('error', 'Content not allowed');
-      return;
-    }
-
-    try {
-      const comp = await gzip(c);
-      if (comp.length > 300) return;
-
-      const msg = await new Msg({ channelId: channel, c: comp, i, s: peer, rep }).save();
-
-      io.to(channel).emit('m', {
-        _id: msg._id.toString(),
-        c,
-        i,
-        s: peer,
-        rep
-      });
-
-      const prefix = peer === socket.id ? 'You' : peer;
-      io.to(channel).emit('lm', `${prefix}: ${c.slice(0, 20)}...`);
-    } catch (err) {
-      console.error('Message save error:', err);
-    }
-  });
-
-  socket.on('t', (typing) => {
-    if (channel && typeof typing === 'boolean') {
-      socket.to(channel).emit('t', { s: peer, t: typing });
-    }
-  });
-
-  socket.on('disconnect', () => {
-    if (channel) {
-      const cnt = io.sockets.adapter.rooms.get(channel)?.size || 0;
-      io.to(channel).emit('o', cnt);
-    }
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 CaughtWiki server running on port ${PORT}`);
-});
+ 
