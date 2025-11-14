@@ -1,3 +1,4 @@
+// server.js
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
@@ -25,6 +26,8 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
+
+// --- Database Models ---
 
 // User schema
 const userSchema = new mongoose.Schema({
@@ -130,6 +133,48 @@ const Permissions = {
   VIEW_AUDIT_LOGS: 1n << 12n
 };
 
+// --- Utility Functions ---
+
+// Log audit events
+const logAudit = async (serverId, action, userId, targetId = null, details = {}, req = null) => {
+  try {
+    await new AuditLog({
+      serverId,
+      action,
+      userId,
+      targetId,
+      details,
+      ip: req ? req.ip : null
+    }).save();
+  } catch (err) {
+    console.error('Audit log failed:', err);
+  }
+};
+
+// Content moderation
+const isContentAllowed = (text) => {
+  const lowerText = text.toLowerCase();
+  const prohibited = ['racism', 'terrorism', 'nazi', 'hitler', 'incite violence', 'plan harm'];
+  return !prohibited.some(term => lowerText.includes(term));
+};
+
+// --- Authentication Middleware ---
+// Define this BEFORE using it in routes
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret', (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+// --- Application Setup ---
+
 await mongoose.connect(process.env.MONGO_URI);
 console.log('✅ MongoDB connected | 30min TTL enabled');
 
@@ -178,21 +223,7 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Log audit events
-const logAudit = async (serverId, action, userId, targetId = null, details = {}, req = null) => {
-  try {
-    await new AuditLog({
-      serverId,
-      action,
-      userId,
-      targetId,
-      details,
-      ip: req ? req.ip : null
-    }).save();
-  } catch (err) {
-    console.error('Audit log failed:', err);
-  }
-};
+// --- Routes ---
 
 // Serve pages
 app.get('/', (req, res) => {
@@ -227,7 +258,7 @@ app.get('/api/server/:serverId/channels', async (req, res) => {
   }
 });
 
-// Audit logs endpoint
+// Audit logs endpoint - authenticateToken is defined before this point
 app.get('/api/server/:serverId/audit-logs', authenticateToken, async (req, res) => {
   try {
     const { serverId } = req.params;
@@ -277,20 +308,6 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ error: 'Login failed' });
   }
 });
-
-// Middleware for auth
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  
-  if (!token) return res.sendStatus(401);
-  
-  jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret', (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
-    next();
-  });
-};
 
 // Authenticated endpoints
 app.get('/api/me', authenticateToken, (req, res) => {
@@ -403,14 +420,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Content moderation
-const isContentAllowed = (text) => {
-  const lowerText = text.toLowerCase();
-  const prohibited = ['racism', 'terrorism', 'nazi', 'hitler', 'incite violence', 'plan harm'];
-  return !prohibited.some(term => lowerText.includes(term));
-};
+// --- Socket.IO Logic ---
 
-// Socket.IO logic
 io.on('connection', (socket) => {
   let channel, peer, userId;
 
