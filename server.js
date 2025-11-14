@@ -1,4 +1,3 @@
-// server.js – RTM + LM + Replying | E2E Encrypted | 30min Auto-Clear
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
@@ -17,23 +16,50 @@ const gunzip = promisify(zlib.gunzip);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Server schema
+const serverSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  id: { type: String, required: true, unique: true, index: true }
+}, { timestamps: true });
+
+// Channel schema
+const channelSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  serverId: { type: String, required: true, index: true }
+}, { timestamps: true });
+
 // Message schema with reply support
 const msgSchema = new mongoose.Schema({
-  r: { type: String, required: true, index: true }, // room ID
+  channelId: { type: String, required: true, index: true },
   c: { type: Buffer, required: true },              // gzipped plaintext
-  i: { type: String, required: true },              // IV for AES (unused in this version but kept for client compat)
+  i: { type: String, required: true },              // IV for AES
   s: { type: String, required: true },              // sender peer ID
   rep: { type: String, default: null }              // replied-to message ID
 }, { timestamps: true, minimize: false });
 
-// TTL index: auto-delete after 30 minutes (MongoDB background task)
+// TTL index: auto-delete after 30 minutes
 msgSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1800 });
+
+const ServerModel = mongoose.model('Server', serverSchema);
+const Channel = mongoose.model('Channel', channelSchema);
 const Msg = mongoose.model('Msg', msgSchema);
 
 await mongoose.connect(process.env.MONGO_URI);
 console.log('✅ MongoDB connected | 30min TTL enabled');
 
-// 🔁 Auto-clear all messages every 30 minutes (manual safety net)
+// Create default server and channel
+const initializeDefault = async () => {
+  const defaultServer = await ServerModel.findOne({ id: 'general' });
+  if (!defaultServer) {
+    await new ServerModel({ name: 'General', id: 'general' }).save();
+    await new Channel({ name: 'general', serverId: 'general' }).save();
+    console.log('🔧 Created default server and channel');
+  }
+};
+
+initializeDefault();
+
+// Auto-clear all messages every 30 minutes
 const clearAllMessages = async () => {
   try {
     const result = await Msg.deleteMany({});
@@ -43,7 +69,6 @@ const clearAllMessages = async () => {
   }
 };
 
-// Run once on startup + every 30 minutes
 clearAllMessages();
 setInterval(clearAllMessages, 30 * 60 * 1000);
 
@@ -60,16 +85,33 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve chat room
-app.get('/r/:roomId', (req, res) => {
-  const { roomId } = req.params;
-  if (!/^[0-9a-f]{64}$/.test(roomId)) {
-    return res.status(400).send('Invalid room ID (must be 64 hex chars)');
-  }
-  res.sendFile(path.join(__dirname, 'public', 'chat.html'));
+// Serve main page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Simple in-memory rate limiter (30 req/min per IP)
+// Serve channel
+app.get('/server/:serverId/channel/:channelId', (req, res) => {
+  const { serverId, channelId } = req.params;
+  if (!/^[a-zA-Z0-9_-]+$/.test(serverId) || !/^[a-zA-Z0-9_-]+$/.test(channelId)) {
+    return res.status(400).send('Invalid IDs');
+  }
+  res.sendFile(path.join(__dirname, 'public', 'channel.html'));
+});
+
+// API endpoints
+app.get('/api/servers', async (req, res) => {
+  const servers = await ServerModel.find({}, 'name id');
+  res.json(servers);
+});
+
+app.get('/api/server/:serverId/channels', async (req, res) => {
+  const { serverId } = req.params;
+  const channels = await Channel.find({ serverId }, 'name');
+  res.json(channels);
+});
+
+// Simple rate limiter
 const rateLimit = new Map();
 app.use((req, res, next) => {
   const ip = req.ip;
@@ -83,19 +125,16 @@ app.use((req, res, next) => {
 
 // Socket.IO logic
 io.on('connection', (socket) => {
-  let room, peer;
+  let channel, peer;
 
-  socket.on('join', async ({ room: r, peer: p }) => {
-    if (!r || !/^[0-9a-f]{64}$/.test(r) || !p || p.length > 10) {
-      return socket.disconnect(true);
-    }
-    room = r;
+  socket.on('join', async ({ channel: ch, peer: p }) => {
+    if (!ch || !p || p.length > 10) return socket.disconnect(true);
+    channel = ch;
     peer = p;
-    socket.join(room);
+    socket.join(channel);
 
     try {
-      // Fetch last 100 messages
-      const hist = await Msg.find({ r: room }).sort({ createdAt: 1 }).limit(100).lean();
+      const hist = await Msg.find({ channelId: channel }).sort({ createdAt: 1 }).limit(100).lean();
       const decompressed = await Promise.all(
         hist.map(async (m) => {
           const buffer = Buffer.isBuffer(m.c) ? m.c : Buffer.from(m.c.buffer);
@@ -111,12 +150,9 @@ io.on('connection', (socket) => {
       );
 
       socket.emit('h', decompressed);
+      const cnt = io.sockets.adapter.rooms.get(channel)?.size || 0;
+      io.to(channel).emit('o', cnt);
 
-      // Online count
-      const cnt = io.sockets.adapter.rooms.get(room)?.size || 0;
-      io.to(room).emit('o', cnt);
-
-      // Last message preview
       if (decompressed.length > 0) {
         const last = decompressed[decompressed.length - 1];
         const prefix = last.s === peer ? 'You' : last.s;
@@ -128,15 +164,15 @@ io.on('connection', (socket) => {
   });
 
   socket.on('m', async ({ c, i, rep }) => {
-    if (!room || !c || typeof c !== 'string') return;
+    if (!channel || !c || typeof c !== 'string') return;
 
     try {
       const comp = await gzip(c);
-      if (comp.length > 300) return; // prevent abuse
+      if (comp.length > 300) return;
 
-      const msg = await new Msg({ r: room, c: comp, i, s: peer, rep }).save();
+      const msg = await new Msg({ channelId: channel, c: comp, i, s: peer, rep }).save();
 
-      io.to(room).emit('m', {
+      io.to(channel).emit('m', {
         _id: msg._id.toString(),
         c,
         i,
@@ -145,27 +181,27 @@ io.on('connection', (socket) => {
       });
 
       const prefix = peer === socket.id ? 'You' : peer;
-      io.to(room).emit('lm', `${prefix}: ${c.slice(0, 20)}...`);
+      io.to(channel).emit('lm', `${prefix}: ${c.slice(0, 20)}...`);
     } catch (err) {
       console.error('Message save error:', err);
     }
   });
 
   socket.on('t', (typing) => {
-    if (room && typeof typing === 'boolean') {
-      socket.to(room).emit('t', { s: peer, t: typing });
+    if (channel && typeof typing === 'boolean') {
+      socket.to(channel).emit('t', { s: peer, t: typing });
     }
   });
 
   socket.on('disconnect', () => {
-    if (room) {
-      const cnt = io.sockets.adapter.rooms.get(room)?.size || 0;
-      io.to(room).emit('o', cnt);
+    if (channel) {
+      const cnt = io.sockets.adapter.rooms.get(channel)?.size || 0;
+      io.to(channel).emit('o', cnt);
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 VoidChat server running on port ${PORT}`);
+  console.log(`🚀 EphemeralChat server running on port ${PORT}`);
 });
