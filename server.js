@@ -92,17 +92,16 @@ const msgSchema = new mongoose.Schema({
 // Audit Log schema
 const auditLogSchema = new mongoose.Schema({
   serverId: { type: String, required: true, index: true },
-  action: { type: String, required: true }, // e.g., 'MEMBER_JOIN', 'MEMBER_LEAVE', 'CHANNEL_CREATE', 'MESSAGE_DELETE', 'BAN', 'KICK', 'TIMEOUT'
-  userId: { type: String, required: true }, // User who performed the action
-  targetId: { type: String }, // Target user/channel if applicable
-  details: { type: Object, default: {} }, // Additional details
-  ip: { type: String }, // IP address (if available)
+  action: { type: String, required: true },
+  userId: { type: String, required: true },
+  targetId: { type: String },
+  details: { type: Object, default: {} },
+  ip: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
 
-// TTL index: auto-delete after 30 minutes for messages
-msgSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1800 });
-// Keep audit logs for 30 days
+// TTL indexes
+msgSchema.index({ createdAt: 1 }, { expireAfterSeconds: 1800 }); // 30 minutes
 auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 }); // 30 days
 
 const User = mongoose.model('User', userSchema);
@@ -197,7 +196,7 @@ const logAudit = async (serverId, action, userId, targetId = null, details = {},
 
 // Serve pages
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'server-list.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('/server/:serverId/channel/:channelId', (req, res) => {
@@ -360,9 +359,114 @@ app.post('/api/servers', authenticateToken, async (req, res) => {
     }).save();
     
     // Log server creation
-    await logAudit(serverId, 'SERVER_CREATE', req.user.id, null, { serverName: name });
+    await logAudit(serverId, 'SERVER_CREATE', req.user.id, null, { serverName: name }, req);
     
     res.json({ id: serverId, name, icon: server.icon });
   } catch (e) {
     res.status(500).json({ error: 'Failed to create server' });
- 
+  }
+});
+
+// File upload endpoint
+app.post('/api/upload', authenticateToken, async (req, res) => {
+  const { file, channelId } = req.body;
+  if (!file || !channelId) return res.status(400).json({ error: 'File and channel required' });
+  
+  try {
+    const uploadResult = await cloudinary.uploader.upload(file, {
+      folder: 'caughtwiki/channels',
+      resource_type: 'auto',
+      public_id: `msg_${channelId}_${Date.now()}`
+    });
+    
+    res.json({
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      type: uploadResult.resource_type,
+      filename: uploadResult.original_filename,
+      size: uploadResult.bytes
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// Simple rate limiter
+const rateLimit = new Map();
+app.use((req, res, next) => {
+  const ip = req.ip;
+  const now = Date.now();
+  const hits = (rateLimit.get(ip) || []).filter(t => now - t < 60_000);
+  if (hits.length >= 30) return res.status(429).send('Too many requests');
+  hits.push(now);
+  rateLimit.set(ip, hits);
+  next();
+});
+
+// Content moderation
+const isContentAllowed = (text) => {
+  const lowerText = text.toLowerCase();
+  const prohibited = ['racism', 'terrorism', 'nazi', 'hitler', 'incite violence', 'plan harm'];
+  return !prohibited.some(term => lowerText.includes(term));
+};
+
+// Socket.IO logic
+io.on('connection', (socket) => {
+  let channel, peer, userId;
+
+  // Auth handshake
+  socket.on('auth', async (data) => {
+    if (data.token) {
+      try {
+        const decoded = jwt.verify(data.token, process.env.JWT_SECRET || 'fallback_secret');
+        userId = decoded.id;
+        peer = decoded.username;
+      } catch (e) {
+        peer = data.tempUsername;
+        userId = 'temp_' + crypto.randomUUID().substring(0, 8);
+      }
+    } else if (data.tempUsername) {
+      peer = data.tempUsername;
+      userId = 'temp_' + crypto.randomUUID().substring(0, 8);
+    } else {
+      return socket.disconnect(true);
+    }
+  });
+
+  socket.on('join', async ({ channel: ch }) => {
+    if (!ch) return socket.disconnect(true);
+    channel = ch;
+    socket.join(channel);
+    
+    try {
+      const hist = await Msg.find({ channelId: channel }).sort({ createdAt: 1 }).limit(100).lean();
+      const decompressed = await Promise.all(
+        hist.map(async (m) => {
+          const buffer = Buffer.isBuffer(m.c) ? m.c : Buffer.from(m.c.buffer);
+          const plaintext = (await gunzip(buffer)).toString();
+          return {
+            _id: m._id.toString(),
+            c: plaintext,
+            i: m.i,
+            s: m.s,
+            rep: m.rep,
+            attachments: m.attachments || []
+          };
+        })
+      );
+
+      socket.emit('h', decompressed);
+      const cnt = io.sockets.adapter.rooms.get(channel)?.size || 0;
+      io.to(channel).emit('o', cnt);
+
+      if (decompressed.length > 0) {
+        const last = decompressed[decompressed.length - 1];
+        const prefix = last.s === peer ? 'You' : last.s;
+        socket.emit('lm', `${prefix}: ${last.c.slice(0, 20)}...`);
+      }
+    } catch (err) {
+      console.error('History load error:', err);
+    }
+  });
+
+  socket.on('m', async ({ c, i, rep,
