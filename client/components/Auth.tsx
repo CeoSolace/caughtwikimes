@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 interface AuthProps {
   isLogin: boolean;
   setIsLogin: (value: boolean) => void;
