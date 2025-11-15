@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import io from 'socket.io-client';
 
 interface User {
   id: string;
@@ -57,10 +58,41 @@ export const Main = ({
   sendMessage
 }: MainProps) => {
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
+  const [socket, setSocket] = useState<any>(null);
+
+  useEffect(() => {
+    // Initialize Socket.io connection
+    const newSocket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000');
+    setSocket(newSocket);
+
+    // Listen for new messages
+    newSocket.on('newMessage', (message: Message) => {
+      // Update messages state to include new message
+      // In a real implementation, this would update the messages array
+    });
+
+    return () => {
+      newSocket.close();
+    };
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('user');
     window.location.href = '/auth';
+  };
+
+  const handleSendMessage = () => {
+    if (socket && activeChannel && newMessage.trim()) {
+      socket.emit('sendMessage', {
+        content: newMessage,
+        channelId: activeChannel,
+        userId: user?.id,
+        username: user?.username
+      });
+      setNewMessage('');
+    } else {
+      sendMessage(); // Fallback to API call
+    }
   };
 
   return (
@@ -100,7 +132,10 @@ export const Main = ({
             {channels.map(channel => (
               <button
                 key={channel._id}
-                onClick={() => loadChannelMessages(channel._id)}
+                onClick={() => {
+                  loadChannelMessages(channel._id);
+                  setActiveChannel(channel._id);
+                }}
                 className={`block w-full text-left p-2 rounded mb-1 ${
                   activeChannel === channel._id ? 'bg-gray-600' : 'hover:bg-gray-600'
                 }`}
@@ -171,13 +206,13 @@ export const Main = ({
               type="text"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
               placeholder={activeChannel ? "Message this channel..." : "Select a channel to start chatting"}
               disabled={!activeChannel}
               className="flex-1 p-3 bg-gray-700 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <button
-              onClick={sendMessage}
+              onClick={handleSendMessage}
               disabled={!activeChannel || !newMessage.trim()}
               className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded font-medium disabled:opacity-50"
             >
