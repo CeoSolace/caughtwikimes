@@ -1,34 +1,40 @@
+// pages/admin.tsx
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 
 export default function AdminPanel() {
   const router = useRouter();
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<any>(null); // You might want to define a proper type
   const [isAdmin, setIsAdmin] = useState(false);
-  const [reports, setReports] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [servers, setServers] = useState([]);
+  const [reports, setReports] = useState<any[]>([]); // You might want to define a proper type
+  const [users, setUsers] = useState<any[]>([]); // You might want to define a proper type
+  const [servers, setServers] = useState<any[]>([]); // You might want to define a proper type
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('reports');
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
+    const storedUser = typeof window !== 'undefined' ? localStorage.getItem('user') : null;
     if (!storedUser) {
       router.push('/auth');
       return;
     }
-    
-    const parsedUser = JSON.parse(storedUser);
-    setUser(parsedUser);
-    
-    // Check if user is admin
-    if (parsedUser.staff || parsedUser.username === 'ceosolace') {
-      setIsAdmin(true);
-      loadAdminData();
-    } else {
-      router.push('/');
+
+    try {
+      const parsedUser = JSON.parse(storedUser);
+      setUser(parsedUser);
+
+      // Check if user is admin
+      if (parsedUser.staff || parsedUser.username === 'ceosolace') {
+        setIsAdmin(true);
+        loadAdminData();
+      } else {
+        router.push('/');
+      }
+    } catch (error) {
+      console.error('Error parsing user data:', error);
+      router.push('/auth');
     }
-  }, []);
+  }, [router]);
 
   const loadAdminData = async () => {
     try {
@@ -38,14 +44,14 @@ export default function AdminPanel() {
         const reportsData = await reportsRes.json();
         setReports(reportsData.reports);
       }
-      
+
       // Load users
       const usersRes = await fetch('/api/admin/users');
       if (usersRes.ok) {
         const usersData = await usersRes.json();
         setUsers(usersData.users);
       }
-      
+
       // Load servers
       const serversRes = await fetch('/api/admin/servers');
       if (serversRes.ok) {
@@ -53,13 +59,14 @@ export default function AdminPanel() {
         setServers(serversData.servers);
       }
     } catch (error) {
-      console.error('Error loading admin ', error);
+      console.error('Error loading admin data', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const resolveReport = async (reportId, action) => {
+  // Add explicit types to the resolveReport function parameters
+  const resolveReport = async (reportId: string, action: 'approve' | 'reject') => {
     try {
       const response = await fetch(`/api/admin/reports/${reportId}`, {
         method: 'PUT',
@@ -68,7 +75,7 @@ export default function AdminPanel() {
         },
         body: JSON.stringify({ action })
       });
-      
+
       if (response.ok) {
         loadAdminData(); // Refresh data
       }
@@ -96,7 +103,7 @@ export default function AdminPanel() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
       <h1 className="text-3xl font-bold mb-6">Admin Panel</h1>
-      
+
       <div className="flex space-x-4 mb-6">
         <button
           onClick={() => setActiveTab('reports')}
@@ -122,7 +129,7 @@ export default function AdminPanel() {
         <div className="bg-gray-800 p-4 rounded">
           <h2 className="text-xl font-bold mb-4">Reports</h2>
           <div className="space-y-4">
-            {reports.map(report => (
+            {reports.map((report: any) => ( // You might want to define a proper type for report
               <div key={report._id} className="bg-gray-700 p-4 rounded border-l-4 border-yellow-500">
                 <div className="flex justify-between items-start">
                   <div>
@@ -172,7 +179,7 @@ export default function AdminPanel() {
                 </tr>
               </thead>
               <tbody>
-                {users.map(user => (
+                {users.map((user: any) => ( // You might want to define a proper type for user
                   <tr key={user._id} className="border-b border-gray-700">
                     <td className="p-2">{user._id}</td>
                     <td className="p-2">{user.username}</td>
@@ -203,7 +210,7 @@ export default function AdminPanel() {
                 </tr>
               </thead>
               <tbody>
-                {servers.map(server => (
+                {servers.map((server: any) => ( // You might want to define a proper type for server
                   <tr key={server._id} className="border-b border-gray-700">
                     <td className="p-2">{server._id}</td>
                     <td className="p-2">{server.name}</td>
