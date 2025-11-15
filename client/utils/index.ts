@@ -121,3 +121,90 @@ export const sanitizeMessage = (content: string): string => {
     .replace(/javascript:/gi, '')
     .replace(/on\w+="[^"]*"/gi, '');
 };
+
+// Get user IP address (client-side)
+export const getUserIP = async (): Promise<string> => {
+  try {
+    const response = await fetch('https://api.ipify.org?format=json');
+    const data = await response.json();
+    return data.ip;
+  } catch (error) {
+    console.error('Error getting IP address:', error);
+    return 'unknown';
+  }
+};
+
+// Check if user is accessing from restricted region
+export const isRestrictedRegion = (countryCode: string): boolean => {
+  // List of restricted countries (example)
+  const restrictedCountries = ['CN', 'RU', 'KP'];
+  return restrictedCountries.includes(countryCode.toUpperCase());
+};
+
+// Generate API key for bot access
+export const generateApiKey = (): string => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = 'cw_';
+  for (let i = 0; i < 32; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
+
+// Validate API key format
+export const isValidApiKey = (key: string): boolean => {
+  return /^cw_[A-Za-z0-9]{32}$/.test(key);
+};
+
+// Calculate time until next message clear
+export const getTimeUntilClear = (): number => {
+  const now = new Date();
+  const nextClear = new Date(now);
+  nextClear.setMinutes(now.getMinutes() + 30 - (now.getMinutes() % 30));
+  nextClear.setSeconds(0);
+  nextClear.setMilliseconds(0);
+  
+  return Math.max(0, nextClear.getTime() - now.getTime());
+};
+
+// Format duration in milliseconds to human readable format
+export const formatDuration = (ms: number): string => {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  
+  if (hours > 0) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
+};
+
+// Debounce function for performance optimization
+export const debounce = <T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): ((...args: Parameters<T>) => void) => {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
+
+// Throttle function for rate limiting
+export const throttle = <T extends (...args: any[]) => any>(
+  func: T,
+  limit: number
+): ((...args: Parameters<T>) => void) => {
+  let inThrottle: boolean;
+  return (...args: Parameters<T>) => {
+    if (!inThrottle) {
+      func(...args);
+      inThrottle = true;
+      setTimeout(() => inThrottle = false, limit);
+    }
+  };
+};
