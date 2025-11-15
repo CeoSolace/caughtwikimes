@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import io from 'socket.io-client';
 
 // Custom hook for managing authentication state
 export const useAuth = () => {
@@ -64,26 +65,138 @@ export const useApi = () => {
 
 // Custom hook for real-time messaging
 export const useMessaging = () => {
-  const [socket, setSocket] = useState(null);
+  const [socket, setSocket] = useState<any>(null);
   const [messages, setMessages] = useState([]);
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    // In a real implementation, this would connect to Socket.io
-    // For now, we'll simulate the connection
-    const mockSocket = {
-      on: () => {},
-      emit: () => {},
-      disconnect: () => {}
-    };
+    const newSocket = io(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000');
     
-    setSocket(mockSocket);
+    newSocket.on('connect', () => {
+      setConnected(true);
+    });
+
+    newSocket.on('disconnect', () => {
+      setConnected(false);
+    });
+
+    newSocket.on('newMessage', (message) => {
+      setMessages(prev => [...prev, message]);
+    });
+
+    setSocket(newSocket);
 
     return () => {
-      if (mockSocket.disconnect) {
-        mockSocket.disconnect();
-      }
+      newSocket.disconnect();
     };
   }, []);
 
-  return { socket, messages, setMessages };
+  const sendMessage = useCallback((content, channelId, userId, username) => {
+    if (socket) {
+      socket.emit('sendMessage', {
+        content,
+        channelId,
+        userId,
+        username
+      });
+    }
+  }, [socket]);
+
+  const joinChannel = useCallback((channelId) => {
+    if (socket) {
+      socket.emit('joinChannel', channelId);
+    }
+  }, [socket]);
+
+  const leaveChannel = useCallback((channelId) => {
+    if (socket) {
+      socket.emit('leaveChannel', channelId);
+    }
+  }, [socket]);
+
+  return { 
+    socket, 
+    messages, 
+    setMessages, 
+    connected, 
+    sendMessage, 
+    joinChannel, 
+    leaveChannel 
+  };
+};
+
+// Custom hook for server management
+export const useServers = () => {
+  const [servers, setServers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const { request } = useApi();
+
+  const loadServers = async (userId) => {
+    setLoading(true);
+    try {
+      const data = await request(`/api/users/${userId}/servers`);
+      setServers(data.servers);
+    } catch (error) {
+      console.error('Error loading servers:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createServer = async (name, ownerId) => {
+    setLoading(true);
+    try {
+      const data = await request('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({ name, ownerId })
+      });
+      setServers(prev => [...prev, data.server]);
+      return data.server;
+    } catch (error) {
+      console.error('Error creating server:', error);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return { servers, loading, loadServers, createServer };
+};
+
+// Custom hook for channel management
+export const useChannels = () => {
+  const [channels, setChannels] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const { request } = useApi();
+
+  const loadChannels = async (serverId) => {
+    setLoading(true);
+    try {
+      const data = await request(`/api/servers/${serverId}/channels`);
+      setChannels(data.channels);
+    } catch (error) {
+      console.error('Error loading channels:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createChannel = async (name, serverId) => {
+    setLoading(true);
+    try {
+      const data = await request('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({ name, serverId })
+      });
+      setChannels(prev => [...prev, data.channel]);
+      return data.channel;
+    } catch (error) {
+      console.error('Error creating channel:', error);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return { channels, loading, loadChannels, createChannel };
 };
