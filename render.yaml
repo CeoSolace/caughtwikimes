@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: caughtwiki
+    env: node
+    buildCommand: |
+      npm install
+      cd client && npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        fromDatabase: caughtwiki-db
+        property: connectionString
+      - key: CLOUDINARY_API
+        value: 539357238995793
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_NAME
+        value: dugwwljcd
+      - key: PASSPHRASE_SALT
+        generateValue: true
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        value: 1439252476204154930
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_REDIRECT_URI
+        value: https://caught.wiki/api/auth/discord/callback  
+      - key: ADMIN_ENCRYPTION_KEY
+        sync: false
+    autoDeploy: true
+    plan: free
+
+databases:
+  - name: caughtwiki-db
+    region: frankfurt
+    plan: free
